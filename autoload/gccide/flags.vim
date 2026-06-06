@@ -264,11 +264,12 @@ function! gccide#flags#show() abort
     echohl WarningMsg | echom 'gccide: no Makefile found' | echohl None
     return
   endif
+  let l:was_running = has_key(s:jobs, l:root)
   let l:files = gccide#flags#extract(l:root)
   if empty(l:files)
-    if has_key(s:cache, l:root) && get(s:cache[l:root], 'status', '') ==# 'extracting'
+    if l:was_running
       echom 'gccide: still extracting; re-run :GccideFlags when notified'
-    else
+    elseif !has_key(s:jobs, l:root)
       echom 'gccide: no compile lines parsed from ' . l:root . '/Makefile'
     endif
     return

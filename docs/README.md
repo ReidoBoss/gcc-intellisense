@@ -27,8 +27,12 @@ above list as unavailable.
   - Go-to-definition opening a new split.
   - Multi-file project awareness.
 - Latency target: ≤500 ms. Snappier is better.
-- Target codebase: a large firmware project. Agents cannot see it directly;
-  the user verifies on a separate work laptop, by hand.
+- Target codebase: a large firmware project on a locked-down Linux work
+  laptop. Day-to-day development of the plugin happens on the user's Mac
+  dev box, which has matching `vim80` and `gcc85` binaries installed.
+  **Manual verification runs on the Mac** — the user is not always at
+  the work laptop. Tests must ship fixtures the user can run locally,
+  not assume an external project.
 
 ## Project layout
 
@@ -40,6 +44,8 @@ docs/                   shared instructions for both agents
 plugin/                 vim plugin entry point
 autoload/gccide/        deferred-load vimscript (gccide#... namespace)
 tests/manual/           step-by-step verification the user runs by hand
+tests/fixtures/proj/    tiny Makefile + .c/.h fixture used by the manual
+                        checklists so they are self-contained.
 ```
 
 ## How the two agents coordinate

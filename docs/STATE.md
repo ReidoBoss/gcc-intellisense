@@ -3,10 +3,12 @@
 > Always read this file first. Always update it before you stop.
 
 ## Current phase
-**P1 — Project detection + flag extraction** (code written; awaiting user
-manual verification). P0 also still owes a manual sign-off — user
-authorized P1 before running `tests/manual/p0.md`. If the P1 checklist
-fails at step 1 (plugin load), bisect with the P0 checklist first.
+**P1 — Project detection + flag extraction** code is in. Manual
+checklists `tests/manual/p0.md` and `tests/manual/p1.md` have been
+rewritten to run on the Mac dev box against the bundled fixture at
+`tests/fixtures/proj/`. Awaiting the user's first real local run.
+Smoke-tested internally against vim80 + the fixture — load, extract,
+cache hit, and cache file shape all green.
 
 ## Last agent
 claude (2026-06-06) — shipped P1:
@@ -22,27 +24,33 @@ claude (2026-06-06) — shipped P1:
   `g:gccide_project_root` override.
 
 ## Next step
-1. Wait for the user to run `tests/manual/p1.md` on the work laptop.
-   Capture any failure output in `docs/JOURNAL.md` before moving on.
-2. Ask the user whether to commit the P1 files (and P0 alongside, if
-   not yet committed).
-3. **Before starting P2**, get the real path to gcc 8.5.0 from the user.
-   `gcc85` is a shell alias and will not survive `job_start()`. The user
-   must `let g:gccide_gcc = '/real/path/to/gcc'` in their vimrc and tell
-   us the path so the manual P2 checklist can reference it.
-4. When P1 is signed off, begin P2 (diagnostics): async
-   `gcc85 -fsyntax-only <flags> <file>` via `job_start`, parse stderr,
-   place signs in the gutter, populate the quickfix list, debounce
-   `TextChanged` through `timer_start()` (default 300 ms).
+1. User runs `tests/manual/p0.md` and `tests/manual/p1.md` locally on
+   the Mac. Capture any failure output in `docs/JOURNAL.md` before
+   moving on.
+2. Ask the user whether to commit the test rewrite (fixture, gitignore,
+   rewritten checklists, README/CONVENTIONS/CLAUDE/AGENTS updates, the
+   `show()` UX fix).
+3. Begin P2 (diagnostics): async `gcc -fsyntax-only <flags> <file>`
+   via `job_start`, with input piped from the buffer (`in_io='buffer'`,
+   `in_buf=<bufnr>`) so dirty buffers work without temp files. Parse
+   `<stdin>:line:col: severity: message` from stderr. Place signs in
+   the gutter via the vim 8.0-compatible `:sign place` ex-command
+   (sign groups + `sign_placelist` are 8.1+). Populate `setqflist`.
+   Debounce `TextChanged`/`TextChangedI` through `timer_start()`
+   (default 300 ms; honors `g:gccide_debounce_ms`).
+4. P2 manual checklist hardcodes the gcc path:
+   `let g:gccide_gcc = '/Users/stephensagarino/Personal-Binaries/xpack-gcc-8.5.0-1/bin/gcc'`
 
 ## Open questions (the next agent must resolve when their phase needs them)
 - **ctags / cscope availability** on the user's work laptop is unknown.
   Before starting P3 (identifier index), ask the user to run
   `command -v ctags` and `command -v cscope` and record the result here.
   Do not depend on either until confirmed.
-- **Real path to gcc 8.5.0**: still unanswered. P1 did not need it
-  (we parse the literal `gcc`/`g++` token out of `make -Bnk` output), but
-  P2 cannot start without it.
+- **Real path to gcc 8.5.0** (Mac): now known —
+  `/Users/stephensagarino/Personal-Binaries/xpack-gcc-8.5.0-1/bin/gcc`.
+  The work laptop path is still unknown; the user will set
+  `g:gccide_gcc` there when they deploy. Plugin code does not hardcode
+  paths — only the Mac manual tests do.
 
 ## Recent decisions
 - Agents run sequentially, not in parallel.
@@ -63,3 +71,5 @@ claude (2026-06-06) — shipped P1:
 - Recursive make is handled via `Entering directory` / `Leaving directory`
   markers. Relative source paths resolve against the current dir on the
   stack. Important for firmware trees with sub-Makefiles.
+- Manual tests run on the Mac, not the work laptop. Fixtures live under
+  `tests/fixtures/` so checklists are copy-paste-runnable.

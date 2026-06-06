@@ -88,10 +88,64 @@ Append-only history. Newest entry at the **bottom**. Format:
   - `:GccideFlags` is synchronous in spirit: first invocation may return
     "still extracting; re-run when notified" — the exit_cb echoes a
     `ready` message so the user knows when to re-run.
-- Did **not** commit. Asking the user before any commit per CLAUDE.md.
+- User authorized a single bootstrap commit covering P0 + P1 + docs
+  (root commit `7eeba58`).
 - Handoff: still need the real path to gcc 8.5.0 from the user before
   starting P2 (diagnostics) — `gcc85` is a shell alias and will not
   resolve inside `job_start()`. The user must `let g:gccide_gcc =
   '/real/path/to/gcc'` in their vimrc. P1 itself does not need it
   (we parse the literal token `gcc`/`g++` out of `make -Bnk` output),
   so P1 can be tested without it.
+
+## 2026-06-06 (test rewrite) — claude
+- User pushed back on the existing `tests/manual/*.md`: they were written
+  assuming verification on the locked-down Linux work laptop. The user
+  doesn't always have that laptop in front of them; they need the manual
+  tests to run on the Mac dev box right now.
+- Confirmed the Mac toolchain via `command -v`:
+  - `vim80` → `/Users/stephensagarino/opt/vim80/bin/vim`
+  - `gcc85` → `/Users/stephensagarino/Personal-Binaries/xpack-gcc-8.5.0-1/bin/gcc`
+  These shell aliases resolve from the shell, so `vim80 …` lines in
+  the checklists work as-is. `gcc85` does not survive `job_start()` —
+  the plugin already reads `g:gccide_gcc`, so this matters only for the
+  vimrc line that manual tests now hardcode.
+- Shipped fixture project at `tests/fixtures/proj/`:
+  - `Makefile` with `-Iinc -DPROJ_BUILD=1 -DVERSION=\"0.1\" -std=c99
+    -Wall -Wextra`.
+  - `inc/proj.h`, `src/main.c`, `src/util.c`. A tiny but realistic 2-TU
+    C99 project; `make -Bnk` emits two parseable gcc invocations.
+- Rewrote `tests/manual/p0.md` and `tests/manual/p1.md` to be entirely
+  self-contained and Mac-local: `cd` into the repo, `set rtp+=.`,
+  point at the bundled fixture. No more `<REPO>`/`<PROJ>`/`<SRC>`
+  substitutions.
+- Updated `docs/README.md`, `docs/CONVENTIONS.md`, `CLAUDE.md`,
+  `AGENTS.md` (the byte-identical pointers stayed in sync) to make the
+  Mac the primary verification surface and to require fixtures over
+  placeholders. The hard rule "tests run on the work laptop" is gone.
+- Added top-level `.gitignore` excluding `.gccide/`, `*.o`, and the
+  fixture's built `proj` binary.
+- Smoke-tested locally with vim80 against the fixture:
+  - Plugin loads with no errors.
+  - First `:GccideFlags` printed `extracting compile flags ...`, the
+    async exit_cb printed `flags ready ... (2 files)`, and a second
+    `:GccideFlags` displayed the right flags for `src/main.c`.
+  - Cache file exists at `tests/fixtures/proj/.gccide/flags` with
+    correct JSON shape.
+  - Cache hit on a fresh vim invocation: no `extracting` line, instant
+    output.
+- Fixed a UX wart caught by the smoke run: first `:GccideFlags` was
+  printing both `extracting ...` and `still extracting; re-run when
+  notified` in the same call. Now the "still extracting" line only
+  appears on subsequent calls while a job is already in flight
+  (we check `has_key(s:jobs, root)` *before* calling `extract()` and
+  only echo on the re-entrant path).
+- Saved three memory entries for future sessions:
+  - feedback: manual tests run on Mac, ship fixtures not placeholders.
+  - reference: Mac paths behind the `vim80`/`gcc85` aliases.
+  - user: dev on Mac, deploy on locked-down Linux laptop.
+- Did **not** commit. Awaiting user confirmation that the rewritten
+  checklists pass when they run them locally.
+- Next: P2 (diagnostics). gcc path is now known
+  (`/Users/stephensagarino/Personal-Binaries/xpack-gcc-8.5.0-1/bin/gcc`)
+  and will be hardcoded into `tests/manual/p2.md` with a reminder to
+  set `g:gccide_gcc` in the user's vimrc.

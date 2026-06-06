@@ -44,13 +44,25 @@ step ("ask user: do you have ctags?") rather than assume.
 ## Manual verification
 
 - Every phase ships with a checklist at `tests/manual/<phase>.md` that
-  the user runs by hand. No automated test harness — the user verifies on
-  their work laptop.
+  the user runs by hand. No automated test harness.
+- **Manual tests run on the user's Mac dev box, not the work laptop.**
+  The Mac has real `vim80` (vim 8.0) and `gcc85` (gcc 8.5.0) installed.
+  The work laptop is the deployment target but the user is not always at
+  it; tests must be self-contained so the Mac is the primary verification
+  surface.
 - **Every coding session must end with a manual test the user can run.**
   If you touched code, the matching `tests/manual/<phase>.md` must cover
   the change. Create the file if it does not exist; extend it if it
   does. Concrete `vim80 …` invocations with an explicit "Expect:" line
-  per step. The user runs them on the work laptop — agents cannot.
+  per step.
+- **Ship fixtures, not placeholders.** If a checklist needs a Makefile
+  project, point at `tests/fixtures/proj/` instead of asking the user to
+  substitute `<PROJ>`. The user must be able to copy-paste each command
+  without filling anything in.
+- Hardcode absolute paths only where the user's machine matters
+  (e.g. `let g:gccide_gcc = '/Users/.../gcc'` in a test). Avoid
+  `<REPO>`-style substitutions; either `cd` into the repo first or use
+  `set rtp+=.`.
 
 ## Tracking changes
 
