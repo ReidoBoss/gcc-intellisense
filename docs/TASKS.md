@@ -22,12 +22,12 @@ a time, since agents run sequentially.
 - [x] Write `tests/manual/p1.md`.
 
 ## P2 — Diagnostics
-- [ ] Async runner for `gcc85 -fsyntax-only` via `job_start()`.
-- [ ] Parse stderr lines into structured diagnostics.
-- [ ] Place signs in the gutter.
-- [ ] Populate the quickfix list.
-- [ ] Debounced re-parse on `TextChanged` (default 300 ms).
-- [ ] Write `tests/manual/p2.md`.
+- [x] Async runner for `gcc -fsyntax-only` via `job_start()`.
+- [x] Parse stderr lines into structured diagnostics.
+- [x] Place signs in the gutter.
+- [x] Populate the quickfix list.
+- [x] Debounced re-parse on `TextChanged` (default 300 ms).
+- [x] Write `tests/manual/p2.md`.
 
 ## P3 — Identifier index
 - [ ] Probe ctags/cscope availability; record result in `STATE.md`.

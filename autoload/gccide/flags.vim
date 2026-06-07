@@ -5,21 +5,55 @@
 let s:cache = {}
 " Live job state, keyed by root: {root: {'lines': [...]}}.
 let s:jobs = {}
+" Per-file resolved project root, so diagnostics don't re-walk on every
+" keystroke (also avoids re-prompting once a user dismissed the prompt).
+" Cache key is the absolute file path; '' is a valid cached result.
+let s:root_by_file = {}
 
 " --- Project detection ------------------------------------------------
 
-function! gccide#flags#project_root(...) abort
+function! s:resolve_quiet(start) abort
   if exists('g:gccide_project_root') && !empty(g:gccide_project_root)
     return substitute(fnamemodify(g:gccide_project_root, ':p'), '/$', '', '')
   endif
-  let l:start = a:0 > 0 && !empty(a:1) ? fnamemodify(a:1, ':p:h') : expand('%:p:h')
-  if empty(l:start)
-    let l:start = getcwd()
-  endif
+  let l:start = !empty(a:start) ? a:start : getcwd()
   let l:mk = findfile('Makefile', l:start . ';')
   if !empty(l:mk)
     return fnamemodify(l:mk, ':p:h')
   endif
+  return ''
+endfunction
+
+function! s:hint_from(args) abort
+  if len(a:args) > 0 && !empty(a:args[0])
+    return fnamemodify(a:args[0], ':p')
+  endif
+  return expand('%:p')
+endfunction
+
+" Quiet variant: no prompts. Diagnostics use this so TextChanged never
+" stops to ask for input. Caches the answer (including the empty answer
+" meaning 'no project').
+function! gccide#flags#project_root_quiet(...) abort
+  let l:hint = s:hint_from(a:000)
+  if has_key(s:root_by_file, l:hint)
+    return s:root_by_file[l:hint]
+  endif
+  let l:start = !empty(l:hint) ? fnamemodify(l:hint, ':h') : ''
+  let l:root = s:resolve_quiet(l:start)
+  let s:root_by_file[l:hint] = l:root
+  return l:root
+endfunction
+
+" Prompting variant: falls back to input() when no Makefile in ancestry.
+" :GccideFlags uses this; diagnostics do not.
+function! gccide#flags#project_root(...) abort
+  let l:hint = s:hint_from(a:000)
+  let l:root = call('gccide#flags#project_root_quiet', a:000)
+  if !empty(l:root)
+    return l:root
+  endif
+  let l:start = !empty(l:hint) ? fnamemodify(l:hint, ':h') : getcwd()
   let l:answer = input('gccide: Makefile directory: ', l:start, 'dir')
   redraw
   if empty(l:answer)
@@ -27,6 +61,7 @@ function! gccide#flags#project_root(...) abort
   endif
   let l:abs = substitute(fnamemodify(l:answer, ':p'), '/$', '', '')
   if filereadable(l:abs . '/Makefile')
+    let s:root_by_file[l:hint] = l:abs
     return l:abs
   endif
   echohl WarningMsg | echom 'gccide: no Makefile at ' . l:abs | echohl None
@@ -243,12 +278,24 @@ endfunction
 
 function! gccide#flags#for_file(file) abort
   let l:abs = fnamemodify(a:file, ':p')
-  let l:root = gccide#flags#project_root(l:abs)
+  let l:root = gccide#flags#project_root_quiet(l:abs)
   if empty(l:root)
     return []
   endif
   let l:files = gccide#flags#extract(l:root)
-  return get(l:files, l:abs, [])
+  if has_key(l:files, l:abs)
+    return l:files[l:abs]
+  endif
+  " Headers don't appear in 'make -Bnk' output. Borrow flags from any TU
+  " in the same project so syntax-only checks still produce useful output.
+  if a:file =~? '\v\.(h|hpp|hh|hxx)$'
+    for l:tu in keys(l:files)
+      if l:tu =~? '\v\.(c|cpp|cc|cxx)$'
+        return l:files[l:tu]
+      endif
+    endfor
+  endif
+  return []
 endfunction
 
 " --- :GccideFlags surface ---------------------------------------------

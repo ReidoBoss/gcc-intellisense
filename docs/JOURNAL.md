@@ -149,3 +149,70 @@ Append-only history. Newest entry at the **bottom**. Format:
   (`/Users/stephensagarino/Personal-Binaries/xpack-gcc-8.5.0-1/bin/gcc`)
   and will be hardcoded into `tests/manual/p2.md` with a reminder to
   set `g:gccide_gcc` in the user's vimrc.
+
+## 2026-06-07 (P2) — claude
+- Shipped P2 (diagnostics).
+- `autoload/gccide/diag.vim` — new module. `gccide#diag#run(bufnr)` is
+  the entry point: dump live buffer to a tempfile, run `gcc -fsyntax-only
+  -x <lang> <flags> <tempfile>` async via `job_start`, capture stderr
+  to a separate tempfile via `err_io=file`, on exit_cb parse and route
+  to signs + quickfix. `gccide#diag#schedule(bufnr)` debounces on a
+  `timer_start` (`g:gccide_debounce_ms`, default 300 ms).
+  `gccide#diag#clear(bufnr)` removes signs and empties qf.
+- `autoload/gccide/flags.vim` — refactored: split `project_root` into
+  prompting + quiet variants, added per-file root caching so the diag
+  hot path never re-walks the filesystem, added header fallback in
+  `for_file` so `.h` buffers borrow flags from a TU.
+- `plugin/gccide.vim` — registered `:GccideDiag`, `:GccideDiagClear`,
+  and a `gccide_diag` augroup that wires `BufWritePost` to
+  `gccide#diag#run()` and `TextChanged`/`TextChangedI` to
+  `gccide#diag#schedule()` for `*.c,*.cpp,*.cc,*.cxx,*.h,*.hpp,*.hh,*.hxx`.
+  Gated on `get(g:, 'gccide_auto', 1)`.
+- `tests/manual/p2.md` — 9-step checklist. Steps 1–7 are scripted
+  (heredoc into `/tmp` + `vim80 -S`); steps 8–9 are interactive.
+- Design notes for the next agent (these were *not* obvious; preserving
+  the reasoning so we don't relearn it):
+  - Signs are managed via the ex-command form (`:sign define`, `:sign
+    place`, `:sign unplace`). `sign_define()` / `sign_placelist()` /
+    sign groups are vim 8.1+. We allocate sign IDs from a monotonic
+    counter scoped per-buffer.
+  - We dump the live buffer to a tempfile and tell gcc to compile *that*
+    file rather than piping via stdin. Both `in_io='buffer'` and
+    `ch_sendraw` + `ch_close_in` rely on vim's event loop being active
+    to flush; under `vim80 -S script.vim` the loop doesn't tick during
+    `:sleep` and the job stays stuck waiting for EOF. Tempfile = no
+    dependency on the event loop.
+  - Stderr is captured via `err_io: 'file'`. The pipe + `err_cb` path
+    is unreliable in vim 8.0 for short-lived processes — `err_cb` may
+    not fire before `exit_cb` and lines get dropped. Reading the tempfile
+    in `exit_cb` is the robust pattern.
+  - `setqflist([], 'r', {'items': …})` (items inside the what dict) is
+    a post-8.0 patch. We use the older two-call form: `setqflist(items,
+    'r')` then `setqflist([], 'a', {'title': 'gccide'})`.
+  - Vim 8.0 in scripted (`-S`) batch mode doesn't reap exited children
+    during plain `:sleep`. Calling `job_status()` in a polling loop
+    forces the reap (and consequently fires the exit_cb). Interactive
+    vim doesn't need this — keystrokes drain callbacks naturally — but
+    the manual test checklist *does*, so `gccide#diag#_wait_done(bufnr,
+    timeout_ms)` is exposed as a test seam.
+  - Tempfile lifecycle: errfile + srcfile paths are bound into the
+    `exit_cb` partial, not stored in `s:jobs`. That way, when a newer
+    keystroke preempts an in-flight job via `job_stop`, the old job's
+    exit_cb (with its bound paths) still cleans up its files. `s:jobs[bufnr]`
+    just tracks "what's the latest job we care about results from" —
+    older callbacks check it with `isnot` and discard their results.
+  - Header support is via flag inheritance, not via stdin tricks: when
+    `gccide#flags#for_file(file)` is called for a `.h`/`.hpp`/etc and
+    the file isn't in the Makefile output, we return the flags of any
+    TU in the same project so gcc gets the right `-I`/`-D` set.
+- Smoke-tested locally on the Mac:
+  - Step 1 (load + status + flags): passes.
+  - Step 3 (clean main.c → 0 signs): passes.
+  - Step 4 (injected error → 2 GccideWarning signs at line 10 + 2 qf
+    items): passes.
+  - Step 5 (header fallback → errors on proj.h): passes.
+- Did **not** commit. Awaiting user verification of the full P2
+  checklist plus the interactive steps 8–9, then commit on request.
+- Next: P3 (identifier index). Open question: ask the user to run
+  `command -v ctags` and `command -v cscope` and record results in
+  `STATE.md` before designing the index walker.

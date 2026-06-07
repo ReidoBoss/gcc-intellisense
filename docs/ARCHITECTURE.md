@@ -81,7 +81,12 @@ Whitelist — agents must not extend without asking the user:
 - `g:gccide_gcc`            — real path to gcc 8.5.0 (alias is shell-only).
 - `g:gccide_make`           — path to make if not on PATH.
 - `g:gccide_project_root`   — override Makefile auto-detection.
-- `g:gccide_debounce_ms`    — diagnostic debounce, default 300.
+- `g:gccide_auto`           — install the diagnostic autocmds (default 1).
+- `g:gccide_live`           — re-check on every typing pause, not just on
+                              save (default 0). A big TU can take seconds
+                              for gcc; keep it off until you have measured
+                              latency on your project.
+- `g:gccide_debounce_ms`    — diagnostic debounce for live mode, default 300.
 - `g:gccide_index_path`     — override `.gccide/index` location.
 
 ## Why these choices

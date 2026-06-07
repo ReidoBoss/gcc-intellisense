@@ -1,3 +1,5 @@
 .gccide/
 *.o
+*.swp
+.*.swp
 tests/fixtures/proj/proj
