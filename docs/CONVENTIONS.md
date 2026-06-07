@@ -22,12 +22,15 @@ When walking the project, scanning, parsing, indexing, or grepping, only
 touch `.c`, `.cpp`, and `.h` files. Object files, build artifacts, and
 generated files are out of scope.
 
-## gcc invocation
+## Diagnostics
 
-- Always invoke `g:gccide_gcc`, not the literal string `gcc85`. The shell
-  alias does not survive into `job_start()`.
-- Always pass compile flags extracted from the Makefile. Never invent
-  `-I` or `-D` flags.
+- The plugin runs the project's Makefile (via `g:gccide_make_cmd`,
+  default `'make'`) and parses gcc's stderr from there. We do **not**
+  invoke gcc directly — the Makefile owns that.
+- Always shell out via `sh -c 'cd <root> && <cmd>'` so the cwd is
+  correct without relying on `job_start`'s `cwd` option (later patch
+  level).
+- Never invent compile flags. The Makefile is the source of truth.
 
 ## ctags / cscope
 

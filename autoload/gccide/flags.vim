@@ -1,71 +1,33 @@
 " Project detection + compile-flag extraction.
 " Source of truth for every later phase that needs gcc flags.
 
-" Cache shape: {root: {'mtime': int, 'files': {absfile: [flags]}, 'status': str}}
+" Cache shape: {root: {'mtime': int, 'files': {absfile: [flags]}}}
 let s:cache = {}
 " Live job state, keyed by root: {root: {'lines': [...]}}.
 let s:jobs = {}
-" Per-file resolved project root, so diagnostics don't re-walk on every
-" keystroke (also avoids re-prompting once a user dismissed the prompt).
-" Cache key is the absolute file path; '' is a valid cached result.
-let s:root_by_file = {}
 
-" --- Project detection ------------------------------------------------
+" --- Project root -----------------------------------------------------
 
-function! s:resolve_quiet(start) abort
-  if exists('g:gccide_project_root') && !empty(g:gccide_project_root)
-    return substitute(fnamemodify(g:gccide_project_root, ':p'), '/$', '', '')
-  endif
-  let l:start = !empty(a:start) ? a:start : getcwd()
-  let l:mk = findfile('Makefile', l:start . ';')
-  if !empty(l:mk)
-    return fnamemodify(l:mk, ':p:h')
-  endif
-  return ''
-endfunction
+" The project root is `g:gccide_project_root` — required, no auto-detect.
+" The Makefile typically lives outside the source tree and an upward
+" walk would not find it. Both the prompting and quiet variants exist
+" only so older call sites stay valid; behaviour is identical.
 
-function! s:hint_from(args) abort
-  if len(a:args) > 0 && !empty(a:args[0])
-    return fnamemodify(a:args[0], ':p')
-  endif
-  return expand('%:p')
-endfunction
-
-" Quiet variant: no prompts. Diagnostics use this so TextChanged never
-" stops to ask for input. Caches the answer (including the empty answer
-" meaning 'no project').
 function! gccide#flags#project_root_quiet(...) abort
-  let l:hint = s:hint_from(a:000)
-  if has_key(s:root_by_file, l:hint)
-    return s:root_by_file[l:hint]
-  endif
-  let l:start = !empty(l:hint) ? fnamemodify(l:hint, ':h') : ''
-  let l:root = s:resolve_quiet(l:start)
-  let s:root_by_file[l:hint] = l:root
-  return l:root
-endfunction
-
-" Prompting variant: falls back to input() when no Makefile in ancestry.
-" :GccideFlags uses this; diagnostics do not.
-function! gccide#flags#project_root(...) abort
-  let l:hint = s:hint_from(a:000)
-  let l:root = call('gccide#flags#project_root_quiet', a:000)
-  if !empty(l:root)
-    return l:root
-  endif
-  let l:start = !empty(l:hint) ? fnamemodify(l:hint, ':h') : getcwd()
-  let l:answer = input('gccide: Makefile directory: ', l:start, 'dir')
-  redraw
-  if empty(l:answer)
+  if !exists('g:gccide_project_root') || empty(g:gccide_project_root)
     return ''
   endif
-  let l:abs = substitute(fnamemodify(l:answer, ':p'), '/$', '', '')
-  if filereadable(l:abs . '/Makefile')
-    let s:root_by_file[l:hint] = l:abs
-    return l:abs
+  return substitute(fnamemodify(g:gccide_project_root, ':p'), '/$', '', '')
+endfunction
+
+function! gccide#flags#project_root(...) abort
+  let l:r = gccide#flags#project_root_quiet()
+  if empty(l:r)
+    echohl WarningMsg
+    echom 'gccide: g:gccide_project_root not set (point it at the Makefile directory)'
+    echohl None
   endif
-  echohl WarningMsg | echom 'gccide: no Makefile at ' . l:abs | echohl None
-  return ''
+  return l:r
 endfunction
 
 " --- Cache helpers ----------------------------------------------------

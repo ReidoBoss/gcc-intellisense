@@ -1,25 +1,18 @@
-" Diagnostics: async 'gcc -fsyntax-only' against the live buffer.
-" Signs in the gutter + items in the quickfix list.
+" Diagnostics: run the project's Makefile, surface gcc errors via signs
+" and the quickfix list. Single in-flight job for the whole project, not
+" one per buffer — this mirrors the user's actual build workflow.
 
-" {bufnr: timer_id}
-let s:timers = {}
-" {bufnr: [sign_id, ...]}  -- our placed sign IDs, so we can unplace them.
+" The most-recent in-flight make job, or v:null. Newer jobs preempt
+" older ones so only the latest result wins.
+let s:current_job = v:null
+" {bufnr: [sign_id, ...]} so we can unplace signs we placed.
 let s:signs = {}
-" {bufnr: job} — only the most-recent in-flight job per buffer. exit_cb
-" compares against this to decide whether its result should still update
-" signs (a newer keystroke may have preempted the run). Tempfile cleanup
-" is unconditional because the file paths are bound into the exit_cb
-" partial, not stored here.
-let s:jobs = {}
-" Repeating timer that pulses job_status() on all in-flight jobs every
-" 100 ms. Without this, vim 8.0's main loop does not wake up to reap an
-" exited child until some unrelated event (next keystroke, redraw)
-" happens — interactive users see multi-second sign-update delays.
-" The pulse self-stops once s:jobs is empty.
-let s:pulse_timer = -1
-" Monotonic counter for sign ids. We avoid sign groups (8.1+) and manage
-" lifecycle by id, scoped per buffer.
+" Monotonic sign-id counter. Sign groups are vim 8.1+; we manage by id.
 let s:sign_id = 12000
+" 100 ms pulse forces vim's main loop to reap the child. Without it,
+" exit_cb doesn't fire until some unrelated event wakes the loop —
+" interactive users would see multi-second delays.
+let s:pulse_timer = -1
 
 function! s:ensure_defines() abort
   if exists('s:defined') | return | endif
@@ -29,12 +22,13 @@ function! s:ensure_defines() abort
   let s:defined = 1
 endfunction
 
-function! s:clear_signs(bufnr) abort
-  if !has_key(s:signs, a:bufnr) | return | endif
-  for l:id in s:signs[a:bufnr]
-    silent! execute printf('sign unplace %d buffer=%d', l:id, a:bufnr)
+function! s:clear_all_signs() abort
+  for [l:bufnr, l:ids] in items(s:signs)
+    for l:id in l:ids
+      silent! execute printf('sign unplace %d buffer=%d', l:id, str2nr(l:bufnr))
+    endfor
   endfor
-  let s:signs[a:bufnr] = []
+  let s:signs = {}
 endfunction
 
 function! s:place_sign(bufnr, lnum, name) abort
@@ -47,13 +41,10 @@ function! s:place_sign(bufnr, lnum, name) abort
   call add(s:signs[a:bufnr], s:sign_id)
 endfunction
 
-function! s:lang_for(file) abort
-  return a:file =~? '\v\.(cpp|cc|cxx|hpp|hh|hxx)$' ? 'c++' : 'c'
-endfunction
-
 " gcc 8 diagnostic line: '<file>:<line>:<col>: <severity>: <msg>'.
-" When we pipe via stdin, <file> is the literal '<stdin>'.
-" Severity may be 'fatal error', 'error', 'warning', or 'note'.
+" make output uses absolute paths (per the project setup); make may
+" also interleave 'In file included from …' and source-context lines,
+" which the regex below ignores (no severity match).
 let s:diag_re       = '\v^([^:]+):(\d+):(\d+):\s+(fatal error|error|warning|note):\s*(.*)$'
 let s:diag_nocol_re = '\v^([^:]+):(\d+):\s+(fatal error|error|warning|note):\s*(.*)$'
 
@@ -75,167 +66,125 @@ function! s:parse_diags(lines) abort
     let l:m = matchlist(l:line, s:diag_re)
     if !empty(l:m)
       call add(l:items, {
-            \ 'lnum': str2nr(l:m[2]),
+            \ 'file': l:m[1], 'lnum': str2nr(l:m[2]),
             \ 'col':  str2nr(l:m[3]),
-            \ 'sev':  l:m[4],
-            \ 'text': l:m[5],
+            \ 'sev':  l:m[4], 'text': l:m[5],
             \ })
       continue
     endif
     let l:m = matchlist(l:line, s:diag_nocol_re)
     if !empty(l:m)
       call add(l:items, {
-            \ 'lnum': str2nr(l:m[2]),
+            \ 'file': l:m[1], 'lnum': str2nr(l:m[2]),
             \ 'col':  1,
-            \ 'sev':  l:m[3],
-            \ 'text': l:m[4],
+            \ 'sev':  l:m[3], 'text': l:m[4],
             \ })
     endif
   endfor
   return l:items
 endfunction
 
-function! s:on_exit(bufnr, errfile, srcfile, job, status) abort
-  let l:lines = filereadable(a:errfile) ? readfile(a:errfile) : []
-  call delete(a:errfile)
-  call delete(a:srcfile)
-  " A newer keystroke may have started another job between when this one
-  " was launched and when it exited; in that case, discard this result.
-  if !has_key(s:jobs, a:bufnr) || s:jobs[a:bufnr] isnot a:job
+function! s:on_exit(errfile, root, job, status) abort
+  " A newer save may have preempted this job; discard the result.
+  if s:current_job isnot a:job
+    call delete(a:errfile)
     return
   endif
-  call remove(s:jobs, a:bufnr)
-  if !bufexists(a:bufnr) | return | endif
+  let l:lines = filereadable(a:errfile) ? readfile(a:errfile) : []
+  call delete(a:errfile)
+  let s:current_job = v:null
 
   call s:ensure_defines()
-  call s:clear_signs(a:bufnr)
+  call s:clear_all_signs()
 
   let l:items = s:parse_diags(l:lines)
   let l:qfitems = []
   for l:d in l:items
-    call s:place_sign(a:bufnr, l:d.lnum, s:severity_to_sign(l:d.sev))
+    " gcc emits paths relative to the Makefile's cwd. Resolve against
+    " the project root so signs match the buffer's absolute filename.
+    let l:abs = l:d.file =~# '^/' ? l:d.file : simplify(a:root . '/' . l:d.file)
+    let l:bufnr = bufnr(l:abs)
+    if l:bufnr > 0 && bufloaded(l:bufnr)
+      call s:place_sign(l:bufnr, l:d.lnum, s:severity_to_sign(l:d.sev))
+    endif
     call add(l:qfitems, {
-          \ 'bufnr': a:bufnr,
-          \ 'lnum':  l:d.lnum,
-          \ 'col':   l:d.col,
-          \ 'type':  s:severity_to_qftype(l:d.sev),
-          \ 'text':  l:d.sev . ': ' . l:d.text,
+          \ 'filename': l:abs,
+          \ 'lnum':     l:d.lnum,
+          \ 'col':      l:d.col,
+          \ 'type':     s:severity_to_qftype(l:d.sev),
+          \ 'text':     l:d.sev . ': ' . l:d.text,
           \ })
   endfor
   call setqflist(l:qfitems, 'r')
   call setqflist([], 'a', {'title': 'gccide'})
 endfunction
 
-function! gccide#diag#run(bufnr) abort
-  if !bufexists(a:bufnr) | return | endif
-  if !exists('g:gccide_gcc') || empty(g:gccide_gcc)
+function! gccide#diag#run() abort
+  if !exists('g:gccide_project_root') || empty(g:gccide_project_root)
     echohl WarningMsg
-    echom 'gccide: g:gccide_gcc is not set (e.g. let g:gccide_gcc = "/path/to/gcc")'
+    echom 'gccide: g:gccide_project_root not set (point it at the Makefile directory)'
     echohl None
     return
   endif
-  if !executable(g:gccide_gcc)
-    echohl WarningMsg | echom 'gccide: g:gccide_gcc not executable: ' . g:gccide_gcc | echohl None
+  let l:root = substitute(fnamemodify(g:gccide_project_root, ':p'), '/$', '', '')
+  if !isdirectory(l:root)
+    echohl WarningMsg | echom 'gccide: project root does not exist: ' . l:root | echohl None
     return
   endif
 
-  let l:file = fnamemodify(bufname(a:bufnr), ':p')
-  if empty(l:file) || l:file !~? '\v\.(c|cpp|cc|cxx|h|hpp|hh|hxx)$'
-    return
-  endif
+  let l:make_cmd = get(g:, 'gccide_make_cmd', 'make')
 
-  let l:root = gccide#flags#project_root_quiet(l:file)
-  if empty(l:root)
-    return
-  endif
-  let l:flags = gccide#flags#for_file(l:file)
-
-  " Drop any prior in-flight job for this buffer; we only want the
-  " latest result to win. The old job's exit_cb still runs and cleans
-  " up its own tempfiles, but its result is discarded (see on_exit).
-  if has_key(s:jobs, a:bufnr)
+  if s:current_job isnot v:null
     try
-      call job_stop(s:jobs[a:bufnr])
+      call job_stop(s:current_job)
     catch
     endtry
-    call remove(s:jobs, a:bufnr)
+    let s:current_job = v:null
   endif
 
-  let l:lang = s:lang_for(l:file)
-  let l:srcfile = tempname() . (l:lang ==# 'c++' ? '.cpp' : '.c')
-  call writefile(getbufline(a:bufnr, 1, '$'), l:srcfile)
   let l:errfile = tempname()
-
-  let l:argv = [g:gccide_gcc, '-fsyntax-only', '-x', l:lang] + l:flags + [l:srcfile]
-  let l:argv_shell = join(map(copy(l:argv), 'shellescape(v:val)'), ' ')
-  let l:cmd = ['sh', '-c', 'cd ' . shellescape(l:root) . ' && ' . l:argv_shell]
-
+  " Don't redirect: gcc's errors land on sh's stderr (captured via
+  " err_io='file'); make's stdout chatter lands on sh's stdout
+  " (discarded via out_io='null'). The parser ignores any non-matching
+  " stderr lines, so make's Entering/Leaving messages are harmless.
+  let l:cmd = ['sh', '-c', 'cd ' . shellescape(l:root) . ' && ' . l:make_cmd]
   let l:job = job_start(l:cmd, {
         \ 'in_io':    'null',
         \ 'out_io':   'null',
         \ 'err_io':   'file',
         \ 'err_name': l:errfile,
-        \ 'exit_cb':  function('s:on_exit', [a:bufnr, l:errfile, l:srcfile]),
+        \ 'exit_cb':  function('s:on_exit', [l:errfile, l:root]),
         \ })
-  let s:jobs[a:bufnr] = l:job
+  let s:current_job = l:job
   call s:ensure_pulse()
 endfunction
 
 function! s:ensure_pulse() abort
-  if s:pulse_timer != -1
-    return
-  endif
+  if s:pulse_timer != -1 | return | endif
   let s:pulse_timer = timer_start(100, function('s:pulse'), {'repeat': -1})
 endfunction
 
 function! s:pulse(tid) abort
-  if empty(s:jobs)
+  if s:current_job is v:null
     call timer_stop(s:pulse_timer)
     let s:pulse_timer = -1
     return
   endif
-  for l:job in values(s:jobs)
-    call job_status(l:job)
-  endfor
+  call job_status(s:current_job)
 endfunction
 
-" Blocking wait used by manual tests in batch (-S) mode. Vim's main loop
-" runs naturally between keystrokes, so interactive use never needs this
-" — but in `vim80 -S script.vim`, ':sleep' alone doesn't reap exited
-" children. Calling job_status() in the loop forces the reap; once the
-" exit_cb fires, the s:jobs entry is removed and we return.
-function! gccide#diag#_wait_done(bufnr, timeout_ms) abort
+function! gccide#diag#clear() abort
+  call s:clear_all_signs()
+  call setqflist([], 'r')
+  call setqflist([], 'a', {'title': 'gccide'})
+endfunction
+
+" Blocking wait for batch tests. Interactive vim doesn't need this.
+function! gccide#diag#_wait_done(timeout_ms) abort
   let l:elapsed = 0
-  while has_key(s:jobs, a:bufnr) && l:elapsed < a:timeout_ms
-    call job_status(s:jobs[a:bufnr])
+  while s:current_job isnot v:null && l:elapsed < a:timeout_ms
+    call job_status(s:current_job)
     sleep 50m
     let l:elapsed += 50
   endwhile
-endfunction
-
-function! s:fire(bufnr, tid) abort
-  if has_key(s:timers, a:bufnr)
-    call remove(s:timers, a:bufnr)
-  endif
-  call gccide#diag#run(a:bufnr)
-endfunction
-
-" Live (typing-time) diagnostics are opt-in via g:gccide_live. A big TU
-" can take seconds for gcc to check; rerunning on every TextChanged debounce
-" would be a lot of wasted work. Save-only (BufWritePost) is the default.
-function! gccide#diag#schedule(bufnr) abort
-  if !get(g:, 'gccide_live', 0)
-    return
-  endif
-  if has_key(s:timers, a:bufnr)
-    call timer_stop(s:timers[a:bufnr])
-  endif
-  let l:ms = get(g:, 'gccide_debounce_ms', 300)
-  let s:timers[a:bufnr] = timer_start(l:ms, function('s:fire', [a:bufnr]))
-endfunction
-
-function! gccide#diag#clear(bufnr) abort
-  call s:clear_signs(a:bufnr)
-  call setqflist([], 'r')
-  call setqflist([], 'a', {'title': 'gccide'})
 endfunction

@@ -42,10 +42,19 @@ Each component maps to a phase in `ROADMAP.md`.
 - Cache the result in `.gccide/flags`, keyed by the Makefile's mtime.
 
 ### 3. Diagnostics engine
-- On `BufWritePost` and debounced `TextChanged`, run
-  `gcc85 -fsyntax-only <flags> <file>` asynchronously.
-- Parse stderr lines matching `file:line:col: (error|warning|note): msg`.
-- Push results into signs (gutter) and the quickfix list.
+- On `BufWritePost`, run `g:gccide_make_cmd` (default `make`) async via
+  `job_start(['sh','-c','cd <root> && <cmd>'], ...)` with `out_io=null`
+  and `err_io=file` (a tempfile).
+- A single in-flight job for the whole project — newer saves preempt
+  in-flight ones via `job_stop` so only the latest result wins.
+- A repeating 100 ms pulse timer calls `job_status()` on the live job
+  so vim's main loop reaps the exited child promptly (without it,
+  interactive users see multi-second delays).
+- On exit, parse stderr lines matching
+  `<abs-path>:<line>:<col>: (fatal error|error|warning|note): msg`.
+  Signs (`E>`/`W>`/`N>`) land in any loaded buffer whose absolute path
+  matches a diagnostic. The quickfix list gets every entry regardless
+  of buffer state.
 
 ### 4. Identifier index
 - Walk `.c`/`.cpp`/`.h` files reachable from the project root (prefer the
@@ -71,23 +80,33 @@ Each component maps to a phase in `ROADMAP.md`.
 
 Whitelist — agents must not extend without asking the user:
 
-- `gcc85` (resolved to a real path at startup; the alias does not survive
-  `job_start()`).
-- `make`
-- `awk`, `sed`, `grep`, `find` — restricted to `.c`/`.cpp`/`.h` files.
+- `make` (or whatever `g:gccide_make_cmd` points at — typically a user
+  script that ultimately invokes `make`).
+- `sh` for the `cd <root> && <cmd>` wrapper.
+- `awk`, `sed`, `grep`, `find` — restricted to `.c`/`.cpp`/`.h` files
+  (planned for P3+).
+
+The plugin no longer calls `gcc` directly — the user's Makefile owns
+that.
 
 ## Configuration variables
 
-- `g:gccide_gcc`            — real path to gcc 8.5.0 (alias is shell-only).
-- `g:gccide_make`           — path to make if not on PATH.
-- `g:gccide_project_root`   — override Makefile auto-detection.
-- `g:gccide_auto`           — install the diagnostic autocmds (default 1).
-- `g:gccide_live`           — re-check on every typing pause, not just on
-                              save (default 0). A big TU can take seconds
-                              for gcc; keep it off until you have measured
-                              latency on your project.
-- `g:gccide_debounce_ms`    — diagnostic debounce for live mode, default 300.
-- `g:gccide_index_path`     — override `.gccide/index` location.
+- `g:gccide_project_root`   — **required.** Absolute path to the
+                              directory that holds your Makefile. No
+                              auto-detection; the Makefile typically
+                              lives outside the source tree and walking
+                              parents would miss it.
+- `g:gccide_make_cmd`       — diagnostic command (default `'make'`).
+                              Set to `'/path/to/your/script.sh'` or
+                              `'make some_target'` if your build wraps
+                              it. Always runs via `sh -c` after `cd`
+                              into `g:gccide_project_root`.
+- `g:gccide_auto`           — install the BufWritePost autocmd (default 1).
+- `g:gccide_source_root`    — **future (P3).** Where `.c`/`.cpp`/`.h`
+                              files live, for the identifier index.
+                              May differ from the Makefile directory.
+- `g:gccide_index_path`     — **future (P3).** Override `.gccide/index`
+                              location.
 
 ## Why these choices
 

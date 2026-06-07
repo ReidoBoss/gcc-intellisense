@@ -3,54 +3,62 @@
 > Always read this file first. Always update it before you stop.
 
 ## Current phase
-**P2 — Diagnostics** committed (`d818076`), then de-Mac-ified
-`tests/manual/p{0,1,2}.md` to parametrize through `$PWD` and
-`$GCCIDE_GCC` so the checklists work on any machine with `vim80` +
-`gcc85`, not just the dev Mac. Awaiting the user's local run from the
-updated p2 checklist.
+**P2 — Diagnostics reworked to run the project's Makefile** instead of
+`gcc -fsyntax-only` per buffer. User flagged that their codebase has a
+Makefile in a separate folder that produces all the right errors;
+running their build is closer to their actual workflow than per-file
+syntax checks. The plugin now calls `g:gccide_make_cmd` (default
+`'make'`) in `g:gccide_project_root` on BufWritePost.
 
 ## Last agent
-claude (2026-06-07) — shipped P2:
-- `autoload/gccide/diag.vim` — new module. Async `gcc -fsyntax-only`
-  via `job_start` against a tempfile dump of the live buffer; stderr
-  captured to another tempfile via `err_io=file`; on exit_cb parse and
-  route to signs + quickfix. `schedule(bufnr)` debounces via
-  `timer_start` (`g:gccide_debounce_ms`, default 300). `clear(bufnr)`
-  removes signs and empties qf.
-- `autoload/gccide/flags.vim` — refactored: split `project_root` into
-  prompting (`gccide#flags#project_root`) and quiet
-  (`gccide#flags#project_root_quiet`) variants. Per-file root cache
-  added so the diag hot path doesn't re-walk on every keystroke.
-  `for_file` falls back to a TU's flags when the file is a header.
-- `plugin/gccide.vim` — `:GccideDiag`, `:GccideDiagClear` commands.
-  `gccide_diag` augroup (gated on `g:gccide_auto`, default on) wires
-  `BufWritePost` → `gccide#diag#run` and
-  `TextChanged`/`TextChangedI` → `gccide#diag#schedule` for `.c`/`.cpp`/
-  `.cc`/`.cxx`/`.h`/`.hpp`/`.hh`/`.hxx` buffers.
-- `tests/manual/p2.md` — 9-step checklist (scripted: load, no-gcc
-  warning, clean, error, header fallback, clear, severity matrix;
-  interactive: TextChanged debounce, BufWritePost).
+claude (2026-06-07) — reworked P2 around `make`:
+- `autoload/gccide/diag.vim` — rewritten. `gccide#diag#run()` runs
+  `g:gccide_make_cmd` (default `make`) async via
+  `job_start(['sh','-c','cd <root> && <cmd>'], ...)`. One in-flight
+  job for the whole project; newer calls preempt via `job_stop`.
+  stderr → tempfile (`err_io=file`); on exit_cb parse and distribute
+  signs across buffers by absolute path, populate `setqflist` for
+  every diagnostic. The 100 ms pulse timer stays (still needed to
+  reap exited children in vim 8.0).
+- `autoload/gccide/flags.vim` — stripped to a thin wrapper around
+  `g:gccide_project_root`. No more `findfile()` walker, no more
+  `input()` prompt. P1 flag extraction (`make -Bnk`) still works, just
+  with the required-config gate.
+- `plugin/gccide.vim` — removed `TextChanged`/`TextChangedI` autocmd
+  (live mode is gone; no longer makes sense with whole-project make).
+  `:GccideDiag` and `:GccideDiagClear` no longer take a bufnr.
+- `tests/manual/p2.md` — rewritten. 6 steps (5 scripted + 1
+  interactive). Scripted tests inject a broken `main.c` via heredoc,
+  run the diagnostic, verify the sign, then `git checkout --` to
+  restore the fixture.
+- `docs/ARCHITECTURE.md` — diagnostics engine section, config vars,
+  and external-tool whitelist all updated to reflect make-based design.
+  `g:gccide_gcc`, `g:gccide_live`, `g:gccide_debounce_ms` are gone.
 
 ## Next step
-1. Ask user whether to commit the test-portability rewrite (p0.md,
-   p1.md, p2.md, README.md, CONVENTIONS.md, CLAUDE.md, AGENTS.md).
-2. **Before P3 (identifier index)**, ask the user to run
-   `command -v ctags` and `command -v cscope` and record the result in
-   this file's "Open questions" section. P3 design depends on whether
-   either is available; we will not depend on them if not confirmed.
-3. P3 itself: walk `.c`/`.cpp`/`.h` files reachable from the project
-   root, regex-extract function/typedef/define/tag/global names, build
-   `{symbol -> [{file, lnum, col, kind}]}`, persist to
-   `<root>/.gccide/index`, expose `:GccideFind <symbol>`.
+1. User runs `tests/manual/p2.md` locally (5 scripted steps + 1
+   interactive). Capture any failure in `docs/JOURNAL.md` first.
+2. Begin P3 (identifier index): walk `g:gccide_source_root` for
+   `.c`/`.cpp`/`.h`, regex-extract function/typedef/define/tag/global
+   names, build `{symbol → [{file, lnum, col, kind}]}`, persist to
+   `<source_root>/.gccide/index`, expose `:GccideFind <symbol>`. No
+   ctags/cscope dependency — `command -v ctags` on the Mac returned
+   the BSD/Xcode ctags which doesn't support the flags we'd need, and
+   cscope isn't installed.
 
 ## Open questions (the next agent must resolve when their phase needs them)
-- **ctags / cscope availability** on the user's work laptop is unknown.
-  Before starting P3 (identifier index), ask the user to run
-  `command -v ctags` and `command -v cscope` and record the result here.
-  Do not depend on either until confirmed.
-- **Real path to gcc 8.5.0**: machine-dependent. Manual tests read it
-  from `$GCCIDE_GCC` (env var). The user `export`s it once before
-  running checklists. Plugin code itself never hardcodes paths.
+- **ctags / cscope availability**:
+  - Dev Mac (2026-06-07): `/usr/bin/ctags` exists but is BSD/Xcode
+    ctags — rejects `--version`, doesn't support `--c-kinds` /
+    `--fields` / `-f -`. Effectively unusable for symbol extraction.
+    `cscope` not installed.
+  - Work laptop: still unknown.
+  - **Decision:** P3 will not depend on ctags or cscope. We roll our
+    own walker + regex extractor in pure vimscript. The prerequisites
+    stay at `vim80` + `gcc85` + standard Unix tools (`find`, `grep`,
+    `awk`, `sed`) — all already on the whitelist.
+- **Real path to gcc 8.5.0**: no longer needed by the plugin. The
+  Makefile owns gcc invocation. (`g:gccide_gcc` is gone.)
 
 ## Recent decisions
 - Agents run sequentially, not in parallel.
@@ -77,31 +85,30 @@ claude (2026-06-07) — shipped P2:
   `$GCCIDE_GCC` (env var the user `export`s). Fixtures under
   `tests/fixtures/` keep checklists copy-paste-runnable. Do not
   hardcode `/Users/<somebody>/…` or `/home/<somebody>/…` paths.
-- P2 diagnostics compile a **tempfile dump of the live buffer**, not
-  stdin. `in_io='buffer'` and `ch_sendraw`+`ch_close_in` both rely on
-  vim's event loop ticking during `:sleep`, which doesn't happen in
-  scripted `-S` mode — gcc waits forever for EOF. Tempfiles sidestep
-  this entirely.
+- **Diagnostics run the project's Makefile, not `gcc -fsyntax-only`.**
+  The user's codebase has a Makefile in a separate folder that
+  produces all the right errors. Per their workflow, running that
+  build is more useful than re-implementing per-file syntax checks.
+  Live-while-typing mode is gone (can't run make against an unsaved
+  buffer). `:w` is the trigger.
 - P2 stderr is captured via `err_io='file'`. The `err_cb` pipe path is
   unreliable in vim 8.0 for short-lived processes (lines get dropped
   before exit_cb fires).
 - `setqflist([], 'r', {'items': …})` requires a post-8.0.0 patch.
   We use the older two-call form: `setqflist(items, 'r')` then
   `setqflist([], 'a', {'title': 'gccide'})`.
-- `gccide#diag#_wait_done(bufnr, ms)` polls `job_status()` to force vim
-  to reap exited children. Bare `:sleep` doesn't do it in `-S` mode.
+- `gccide#diag#_wait_done(ms)` polls `job_status()` to force vim to
+  reap the exited child. Bare `:sleep` doesn't do it in `-S` mode.
   Interactive vim doesn't need it. Manual test scripts do.
-- P2 tempfile lifecycle: `errfile`/`srcfile` are bound into the
-  `exit_cb` partial (not stored in `s:jobs`), so a preempted job's
-  cleanup still runs even though its result is discarded. `s:jobs[bufnr]`
-  just identifies "which job's result do we still want."
 - A repeating 100 ms pulse timer in diag.vim calls `job_status()` on
-  every in-flight job. Without it, vim 8.0's main loop didn't wake up
-  to reap exited gcc children until some unrelated event (next
-  keystroke, redraw) happened — interactive users saw 5+ second
-  sign-update delays. The pulse self-stops once `s:jobs` is empty.
-- Diagnostics default to **save-only** (`BufWritePost`). Live-while-typing
-  checks are opt-in via `let g:gccide_live = 1`. Reason: gcc on a large
-  firmware TU can take seconds, so re-running on every typing pause is
-  wasteful. `gccide#diag#schedule()` no-ops early when live mode is off.
-  Don't flip this default without checking with the user.
+  the in-flight job. Without it, vim 8.0's main loop didn't wake up
+  to reap exited children until some unrelated event (next keystroke,
+  redraw) happened — interactive users saw 5+ second sign-update
+  delays. The pulse self-stops once the job is gone.
+- Single in-flight make job for the whole project (not one per
+  buffer). Newer saves call `job_stop` on the prior job; that job's
+  exit_cb sees `s:current_job isnot a:job` and discards its result
+  while still deleting its tempfile.
+- `g:gccide_project_root` is **required**. No auto-detection — the
+  Makefile typically lives outside the source tree, an upward walk
+  would miss it. The plugin no-ops cleanly when unset.

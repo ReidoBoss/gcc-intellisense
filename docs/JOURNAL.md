@@ -240,3 +240,47 @@ Append-only history. Newest entry at the **bottom**. Format:
 - Did **not** commit. Asking the user before commit per CLAUDE.md.
 - Next agent: this is purely a docs/test rewrite — the
   plugin code at HEAD (`d818076`) is unchanged.
+
+## 2026-06-07 (P2 reworked around make) — claude
+- User flagged that their codebase has a Makefile in a separate folder
+  that already produces all the right errors via the build. They want
+  diagnostics to come from running that Makefile, not from
+  `gcc -fsyntax-only` per buffer. Confirmed: just `make`, no args, paths
+  in output are absolute, and they invoke it through their own script
+  that cd's into the Makefile dir.
+- Rewrote `autoload/gccide/diag.vim` around `make`:
+  - Single in-flight job for the whole project (not per buffer).
+  - `job_start(['sh','-c','cd <root> && <g:gccide_make_cmd>'], ...)`
+    with `out_io='null'` and `err_io='file'`.
+  - On exit_cb, parse stderr for `abs:line:col: severity: msg`. Signs
+    land in any loaded buffer matching the abs path; quickfix gets
+    every diagnostic. Discards results from preempted jobs (newer
+    save preempts older via `job_stop`).
+  - Same 100 ms pulse timer trick as before to force vim to reap the
+    child promptly.
+- Stripped `autoload/gccide/flags.vim` down to a thin wrapper around
+  `g:gccide_project_root` — no more `findfile()` walker, no `input()`
+  prompt. The Makefile lives outside the source tree; auto-detect was
+  always going to be wrong here.
+- `plugin/gccide.vim`: removed the `TextChanged`/`TextChangedI`
+  autocmd. `:GccideDiag` and `:GccideDiagClear` no longer take a
+  bufnr.
+- `docs/ARCHITECTURE.md`: diagnostics-engine section, external-tool
+  whitelist, and config-var list all updated. Dropped
+  `g:gccide_gcc`, `g:gccide_live`, `g:gccide_debounce_ms`. Added
+  `g:gccide_make_cmd`. Added `g:gccide_source_root` /
+  `g:gccide_index_path` as P3 placeholders.
+- Smoke-tested locally: clean fixture → 0 signs, qf empty. Broken
+  fixture (`bad_token_xyz();` injected into main.c) → 1 GccideError
+  sign at line 8 + 1 qf item with the right error text.
+- Rewrote `tests/manual/p2.md`: 5 scripted + 1 interactive. Tests
+  inject a broken main.c via heredoc, run the diagnostic, verify,
+  then `git checkout --` to restore the fixture.
+- Recorded ctags/cscope probe on the Mac (BSD ctags unusable, cscope
+  not installed); P3 will roll its own walker.
+- Plugin no longer invokes gcc at all — `$GCCIDE_GCC` env var in the
+  manual tests is also gone. Prerequisites narrow to just `vim80`,
+  `make`, and whatever `make` itself needs. Project still works
+  anywhere those are available.
+- Smoke + commit + push pending user approval (they pre-authorized
+  "one commit" for this whole rework).

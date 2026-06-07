@@ -9,15 +9,13 @@ let g:loaded_gccide = 1
 
 command! GccideStatus     echo gccide#status()
 command! GccideFlags      call gccide#flags#show()
-command! GccideDiag       call gccide#diag#run(bufnr('%'))
-command! GccideDiagClear  call gccide#diag#clear(bufnr('%'))
+command! GccideDiag       call gccide#diag#run()
+command! GccideDiagClear  call gccide#diag#clear()
 
 if get(g:, 'gccide_auto', 1)
   augroup gccide_diag
     autocmd!
     autocmd BufWritePost *.c,*.cpp,*.cc,*.cxx,*.h,*.hpp,*.hh,*.hxx
-          \ call gccide#diag#run(bufnr('%'))
-    autocmd TextChanged,TextChangedI *.c,*.cpp,*.cc,*.cxx,*.h,*.hpp,*.hh,*.hxx
-          \ call gccide#diag#schedule(bufnr('%'))
+          \ call gccide#diag#run()
   augroup END
 endif
