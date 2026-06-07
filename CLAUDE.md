@@ -18,13 +18,15 @@ shared docs in `docs/`.
 1. Append a new entry to `docs/JOURNAL.md` describing what you did and why.
 2. Update `docs/STATE.md` so the next agent knows where to start.
 3. Tick or move items in `docs/TASKS.md`.
-4. **Hand the user a manual test they can run on the Mac dev box.** If
-   you wrote or changed code, the relevant `tests/manual/<phase>.md`
-   must cover it. Ship fixtures under `tests/fixtures/` instead of asking
-   the user to substitute paths — every step must be copy-paste-runnable
-   without filling anything in. The Mac has `vim80` and `gcc85` aliases
-   to real binaries; the user does not always have the work laptop in
-   front of them. Never end a coding session without this.
+4. **Hand the user a manual test they can run on any machine with the
+   prerequisites.** Prerequisites are `vim80` (vim 8.0) and `gcc85`
+   (gcc 8.5.0), nothing else. If you wrote or changed code, the
+   relevant `tests/manual/<phase>.md` must cover it. Ship fixtures
+   under `tests/fixtures/` instead of asking the user to substitute
+   paths. Parametrize via `$PWD` (after `cd` into the repo) and an env
+   var like `$GCCIDE_GCC` for the gcc binary — never hardcode
+   `/Users/<somebody>/…` or `/home/<somebody>/…` paths. Never end a
+   coding session without this.
 
 ## Hard rules
 

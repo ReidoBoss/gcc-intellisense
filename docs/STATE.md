@@ -3,12 +3,11 @@
 > Always read this file first. Always update it before you stop.
 
 ## Current phase
-**P2 — Diagnostics** code is in. Plugin runs `gcc -fsyntax-only`
-async on save and on a 300ms-debounced TextChanged, places signs in
-the gutter, populates the quickfix list. Manual checklist
-`tests/manual/p2.md` written (9 steps, scripted + interactive).
-Smoke-tested locally on this Mac — clean buffer, injected error,
-header fallback all green. Awaiting the user's local run.
+**P2 — Diagnostics** committed (`d818076`), then de-Mac-ified
+`tests/manual/p{0,1,2}.md` to parametrize through `$PWD` and
+`$GCCIDE_GCC` so the checklists work on any machine with `vim80` +
+`gcc85`, not just the dev Mac. Awaiting the user's local run from the
+updated p2 checklist.
 
 ## Last agent
 claude (2026-06-07) — shipped P2:
@@ -33,18 +32,13 @@ claude (2026-06-07) — shipped P2:
   interactive: TextChanged debounce, BufWritePost).
 
 ## Next step
-1. User runs `tests/manual/p2.md` locally on the Mac (steps 1–7
-   scripted, 8–9 interactive). Any failure → capture output in
-   `docs/JOURNAL.md` first.
-2. Ask the user whether to commit P2 (the new `diag.vim`, refactored
-   `flags.vim`, `:GccideDiag*` commands + augroup in `plugin/gccide.vim`,
-   `tests/manual/p2.md`).
-3. **Before P3 (identifier index)**, ask the user to run
-   `command -v ctags` and `command -v cscope` on the Mac and record
-   the result in this file's "Open questions" section. P3 design
-   depends on whether either is available; we will not depend on them
-   if not confirmed.
-4. P3 itself: walk `.c`/`.cpp`/`.h` files reachable from the project
+1. Ask user whether to commit the test-portability rewrite (p0.md,
+   p1.md, p2.md, README.md, CONVENTIONS.md, CLAUDE.md, AGENTS.md).
+2. **Before P3 (identifier index)**, ask the user to run
+   `command -v ctags` and `command -v cscope` and record the result in
+   this file's "Open questions" section. P3 design depends on whether
+   either is available; we will not depend on them if not confirmed.
+3. P3 itself: walk `.c`/`.cpp`/`.h` files reachable from the project
    root, regex-extract function/typedef/define/tag/global names, build
    `{symbol -> [{file, lnum, col, kind}]}`, persist to
    `<root>/.gccide/index`, expose `:GccideFind <symbol>`.
@@ -54,11 +48,9 @@ claude (2026-06-07) — shipped P2:
   Before starting P3 (identifier index), ask the user to run
   `command -v ctags` and `command -v cscope` and record the result here.
   Do not depend on either until confirmed.
-- **Real path to gcc 8.5.0** (Mac): now known —
-  `/Users/stephensagarino/Personal-Binaries/xpack-gcc-8.5.0-1/bin/gcc`.
-  The work laptop path is still unknown; the user will set
-  `g:gccide_gcc` there when they deploy. Plugin code does not hardcode
-  paths — only the Mac manual tests do.
+- **Real path to gcc 8.5.0**: machine-dependent. Manual tests read it
+  from `$GCCIDE_GCC` (env var). The user `export`s it once before
+  running checklists. Plugin code itself never hardcodes paths.
 
 ## Recent decisions
 - Agents run sequentially, not in parallel.
@@ -79,8 +71,12 @@ claude (2026-06-07) — shipped P2:
 - Recursive make is handled via `Entering directory` / `Leaving directory`
   markers. Relative source paths resolve against the current dir on the
   stack. Important for firmware trees with sub-Makefiles.
-- Manual tests run on the Mac, not the work laptop. Fixtures live under
-  `tests/fixtures/` so checklists are copy-paste-runnable.
+- Manual tests run on any machine that has `vim80` and `gcc85` —
+  prerequisites are those two binaries, nothing else. Checklists
+  parametrize through `$PWD` (after `cd` into the repo) and
+  `$GCCIDE_GCC` (env var the user `export`s). Fixtures under
+  `tests/fixtures/` keep checklists copy-paste-runnable. Do not
+  hardcode `/Users/<somebody>/…` or `/home/<somebody>/…` paths.
 - P2 diagnostics compile a **tempfile dump of the live buffer**, not
   stdin. `in_io='buffer'` and `ch_sendraw`+`ch_close_in` both rely on
   vim's event loop ticking during `:sleep`, which doesn't happen in

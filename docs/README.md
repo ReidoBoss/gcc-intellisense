@@ -27,12 +27,13 @@ above list as unavailable.
   - Go-to-definition opening a new split.
   - Multi-file project awareness.
 - Latency target: ≤500 ms. Snappier is better.
-- Target codebase: a large firmware project on a locked-down Linux work
-  laptop. Day-to-day development of the plugin happens on the user's Mac
-  dev box, which has matching `vim80` and `gcc85` binaries installed.
-  **Manual verification runs on the Mac** — the user is not always at
-  the work laptop. Tests must ship fixtures the user can run locally,
-  not assume an external project.
+- Target codebase: a large firmware project. Day-to-day plugin development
+  happens on a dev box that also has `vim80` and `gcc85` installed.
+- **Manual verification runs on whichever machine has the prerequisites
+  available.** The only prerequisites are `vim80` (vim 8.0) and `gcc85`
+  (gcc 8.5.0). Tests ship a self-contained fixture under
+  `tests/fixtures/proj/`; checklists parametrize machine-specific paths
+  through environment variables, never hardcode them.
 
 ## Project layout
 

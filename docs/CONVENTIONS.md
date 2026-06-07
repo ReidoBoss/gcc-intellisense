@@ -45,11 +45,12 @@ step ("ask user: do you have ctags?") rather than assume.
 
 - Every phase ships with a checklist at `tests/manual/<phase>.md` that
   the user runs by hand. No automated test harness.
-- **Manual tests run on the user's Mac dev box, not the work laptop.**
-  The Mac has real `vim80` (vim 8.0) and `gcc85` (gcc 8.5.0) installed.
-  The work laptop is the deployment target but the user is not always at
-  it; tests must be self-contained so the Mac is the primary verification
-  surface.
+- **The only prerequisites are `vim80` (vim 8.0) and `gcc85` (gcc 8.5.0).**
+  Tests run on any machine that has them — the dev box, the deployment
+  target, anywhere. Do **not** hardcode machine-specific paths (no
+  `/Users/<somebody>/…`, no `/home/<somebody>/…`); parametrize via
+  `$PWD` (after `cd` into the repo root) and an env var like
+  `$GCCIDE_GCC` for the gcc binary path.
 - **Every coding session must end with a manual test the user can run.**
   If you touched code, the matching `tests/manual/<phase>.md` must cover
   the change. Create the file if it does not exist; extend it if it
@@ -58,11 +59,12 @@ step ("ask user: do you have ctags?") rather than assume.
 - **Ship fixtures, not placeholders.** If a checklist needs a Makefile
   project, point at `tests/fixtures/proj/` instead of asking the user to
   substitute `<PROJ>`. The user must be able to copy-paste each command
-  without filling anything in.
-- Hardcode absolute paths only where the user's machine matters
-  (e.g. `let g:gccide_gcc = '/Users/.../gcc'` in a test). Avoid
-  `<REPO>`-style substitutions; either `cd` into the repo first or use
-  `set rtp+=.`.
+  without filling anything in beyond a one-time `cd` and `export`.
+- When a heredoc must bake an absolute path into a vim script
+  (e.g. for `set rtp+=`), use an unquoted heredoc (`<<VIM`, not
+  `<<'VIM'`) so the shell expands `$PWD` / `$GCCIDE_GCC` before vim
+  sees them. Escape any literal `$` that vim must still see — for
+  instance `line('\$')` for vim's last-line marker.
 
 ## Tracking changes
 

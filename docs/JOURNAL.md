@@ -216,3 +216,27 @@ Append-only history. Newest entry at the **bottom**. Format:
 - Next: P3 (identifier index). Open question: ask the user to run
   `command -v ctags` and `command -v cscope` and record results in
   `STATE.md` before designing the index walker.
+
+## 2026-06-07 (test portability) — claude
+- User pushed back that the project should not be Mac-only; the only
+  prerequisites are `vim80` (vim 8.0) and `gcc85` (gcc 8.5.0). The
+  plugin code was already portable (reads `g:gccide_gcc`), but
+  `tests/manual/p{0,1,2}.md` had baked in `/Users/stephensagarino/…`
+  paths from earlier sessions.
+- Rewrote all three checklists to parametrize through `$PWD` (after
+  `cd` into the repo) and `$GCCIDE_GCC` (env var the user `export`s
+  once before running). Heredocs that build vim scripts now use the
+  unquoted `<<VIM` form so the shell expands variables; literal `$`
+  that vim must still see is escaped as `\$`.
+- Verified step 4 of `p2.md` still works on this Mac after the rewrite
+  — same output (2 GccideWarning signs at line 10, qf-len 2).
+- Updated `docs/README.md`, `docs/CONVENTIONS.md`, `CLAUDE.md`,
+  `AGENTS.md` (kept byte-identical) to drop "Mac dev box" framing.
+- Updated memories: `feedback_manual_tests_local.md` renamed to
+  "Manual tests run on any prereq machine";
+  `reference_local_toolchain.md` renamed to make it explicit those
+  Mac-specific paths are for the agent's own smoke testing and must
+  not be hardcoded into any committed file.
+- Did **not** commit. Asking the user before commit per CLAUDE.md.
+- Next agent: this is purely a docs/test rewrite — the
+  plugin code at HEAD (`d818076`) is unchanged.
