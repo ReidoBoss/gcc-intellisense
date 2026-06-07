@@ -30,12 +30,12 @@ a time, since agents run sequentially.
 - [x] Write `tests/manual/p2.md`.
 
 ## P3 — Identifier index
-- [ ] Probe ctags/cscope availability; record result in `STATE.md`.
-- [ ] File walker scoped to `.c`/`.cpp`/`.h`.
-- [ ] Regex symbol extraction (functions, typedefs, defines, tags, globals).
-- [ ] Persist `.gccide/index`.
-- [ ] `:GccideFind <symbol>` command.
-- [ ] Write `tests/manual/p3.md`.
+- [x] Probe ctags/cscope availability; record result in `STATE.md`.
+- [x] File walker scoped to `.c`/`.cpp`/`.h`.
+- [x] Regex symbol extraction (functions, typedefs, defines, tags, globals).
+- [x] Persist `.gccide/index`.
+- [x] `:GccideFind <symbol>` command.
+- [x] Write `tests/manual/p3.md`.
 
 ## P4 — Autocomplete
 - [ ] `gccide#omnicomplete()` returning index-filtered candidates.

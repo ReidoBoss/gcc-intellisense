@@ -284,3 +284,71 @@ Append-only history. Newest entry at the **bottom**. Format:
   anywhere those are available.
 - Smoke + commit + push pending user approval (they pre-authorized
   "one commit" for this whole rework).
+
+## 2026-06-08 (P3) — claude
+- Shipped P3 (identifier index). No new external tools — the plugin
+  still only shells out via `sh -c '… && find …'`. ctags + cscope
+  remain unused (BSD ctags on the dev Mac is unusable and cscope
+  isn't installed; this was settled in the prior session's STATE.md).
+- `autoload/gccide/index.vim` — new module.
+  - `gccide#index#source_root()` returns `g:gccide_source_root` or
+    falls back to `g:gccide_project_root`. Plugin no-ops cleanly when
+    neither is set.
+  - `gccide#index#build()` async-walks via
+    `job_start(['sh','-c','cd <src> && find . -type f \( -name '*.c'
+    -o ... \)'])` with one in-flight job at a time. stdout streams
+    into `s:find_lines` via `out_cb`; exit_cb hands the list off to
+    `s:parse_chunk(files, 0)` which slices 50 files per chunk and
+    re-arms itself with `timer_start(1, ...)`. This keeps vim's main
+    loop ticking between chunks — important for firmware-sized trees.
+  - `s:extract_file(file)`: per-file regex extraction at brace-depth 0.
+    Strings + `//` comments + one-line `/* */` comments are stripped
+    before depth counting; multi-line block comments thread through a
+    `[in_block]` state list. Symbols: `d` (#define), `t` (typedef —
+    single-line `typedef ... NAME;` OR trailing `} NAME;`), `s`
+    (struct/union/enum tag — also from `typedef struct NAME { … }`),
+    `f` (function definition — signature with `{` same-line, or sig
+    ending in `)` plus `{` on next line; declarations dropped via `;`
+    detection), `g` (file-scope global — loose regex with `(`-absence
+    guard and a keyword denylist).
+  - Persistence: `<project_root>/.gccide/index` (override with
+    `g:gccide_index_path`), JSON-encoded `{name: [{file, lnum, col,
+    kind}]}`. Loaded lazily on first `:GccideFind` if the in-memory
+    dict is empty.
+  - `gccide#index#find(sym)` populates qf with every hit, attaches the
+    `gccide-find:<sym>` title, and `:copen`s. Missing symbol → empty
+    qf + an echo line.
+  - 100 ms pulse timer (`s:pulse`) reaps `find` children the same way
+    diag.vim does. Self-stops once both job and parse are done.
+  - Test seams: `_wait_done(ms)` blocks until build settles;
+    `_stats()` returns `{symbols, loaded_from}`.
+- `plugin/gccide.vim`: registered `:GccideIndex` (no args) and
+  `:GccideFind` (`-nargs=1`).
+- `tests/fixtures/proj/inc/proj.h`: an interim draft of P3 added a
+  typedef and a struct tag here to broaden checklist coverage. The
+  user reverted that change; the fixture is back to the P2 baseline.
+  The extractor still implements `t`/`s`/`g` kinds — they are simply
+  not exercised by the bundled checklist, and `tests/manual/p3.md`
+  flags this so the user knows to verify those branches against a
+  real codebase.
+- `tests/manual/p3.md`: 6 scripted + 1 interactive step. Build →
+  on-disk file → stats; find-by-function (auto-loads from disk on a
+  fresh vim, with no `:GccideIndex` call); find-by-kind across the
+  define + function symbols present in the fixture; missing-symbol;
+  no-root warning; interactive `Enter` jump from the quickfix
+  window.
+- Smoke against the fixture on the Mac (`vim80`): 5 symbols indexed,
+  every lookup returns the right qf payload (PROJ_H@proj.h:2,
+  PROJ_MAGIC@proj.h:4, main@main.c:4, proj_add@util.c:4,
+  proj_greet@util.c:8). Index file shape verified. Fresh-vim
+  auto-load works.
+- Did **not** commit. CLAUDE.md says ask first; waiting on user
+  sign-off on the P3 checklist before commit.
+- Handoff to P4 (autocomplete): the index module already exposes the
+  data the omnifunc needs (`s:idx` is `{name: [...]}`). Add a public
+  `gccide#index#candidates(prefix)` accessor and wire
+  `omnifunc=gccide#omnicomplete`. Two open design questions: implicit
+  index-on-first-complete vs. require `:GccideIndex` explicitly, and
+  whether to add a per-buffer re-extract on `BufWritePost` so
+  freshly-typed identifiers complete without a full re-walk (the
+  cross-file re-walk is queued for P6).

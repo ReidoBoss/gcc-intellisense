@@ -11,6 +11,8 @@ command! GccideStatus     echo gccide#status()
 command! GccideFlags      call gccide#flags#show()
 command! GccideDiag       call gccide#diag#run()
 command! GccideDiagClear  call gccide#diag#clear()
+command! GccideIndex      call gccide#index#build()
+command! -nargs=1 GccideFind call gccide#index#find(<q-args>)
 
 if get(g:, 'gccide_auto', 1)
   augroup gccide_diag

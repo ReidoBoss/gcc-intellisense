@@ -57,12 +57,29 @@ Each component maps to a phase in `ROADMAP.md`.
   of buffer state.
 
 ### 4. Identifier index
-- Walk `.c`/`.cpp`/`.h` files reachable from the project root (prefer the
-  Makefile-derived source list when available; fall back to `find`).
-- Regex-extract: function definitions, typedefs, `#define`s, struct/union/
-  enum tags, file-scope globals.
-- Build `{symbol -> [{file, lnum, col, kind}]}`. Persist to
-  `.gccide/index` in the project root.
+- Walk `.c`/`.cpp`/`.cc`/`.cxx`/`.h`/`.hpp`/`.hh`/`.hxx` files under
+  `g:gccide_source_root` (falls back to `g:gccide_project_root`) via
+  `job_start(['sh','-c','cd <src> && find . -type f \( -name '*.c' -o … \)'])`.
+  We deliberately do **not** consult the Makefile-derived TU list: the
+  source tree typically has headers and conditionally-excluded `.c`
+  files we still want indexed for navigation.
+- Per-file regex extraction at brace-depth 0. Strings + `//` comments
+  + one-line `/* */` comments are stripped before depth counting;
+  multi-line block comments thread a state flag across lines.
+- Symbol kinds:
+  - `d` `#define`
+  - `t` typedef (single-line `typedef ... NAME;` or trailing `} NAME;`)
+  - `s` struct/union/enum tag (incl. `typedef struct NAME { … }`)
+  - `f` function definition (signature with `{` same-line, or sig
+    ending in `)` plus `{` on next line — declarations dropped)
+  - `g` file-scope global (loose match with `(`-absence guard and a
+    keyword denylist)
+- Parsing is chunked through `timer_start(1, ...)` at 50 files per
+  chunk so vim's main loop ticks between batches.
+- Persist `{name: [{file, lnum, col, kind}]}` to
+  `<project_root>/.gccide/index` (override with `g:gccide_index_path`)
+  as JSON. Loaded lazily on first `:GccideFind` if the in-memory dict
+  is empty.
 
 ### 5. Autocomplete (identifier-only)
 - `omnifunc=gccide#omnicomplete`. Return candidates from the identifier
@@ -83,8 +100,10 @@ Whitelist — agents must not extend without asking the user:
 - `make` (or whatever `g:gccide_make_cmd` points at — typically a user
   script that ultimately invokes `make`).
 - `sh` for the `cd <root> && <cmd>` wrapper.
-- `awk`, `sed`, `grep`, `find` — restricted to `.c`/`.cpp`/`.h` files
-  (planned for P3+).
+- `find` — restricted to `.c`/`.cpp`/`.cc`/`.cxx`/`.h`/`.hpp`/`.hh`/`.hxx`
+  via explicit `-name` predicates. Used by the identifier index.
+- `awk`, `sed`, `grep` — whitelisted but currently unused; reserved
+  for later phases.
 
 The plugin no longer calls `gcc` directly — the user's Makefile owns
 that.
@@ -102,11 +121,13 @@ that.
                               it. Always runs via `sh -c` after `cd`
                               into `g:gccide_project_root`.
 - `g:gccide_auto`           — install the BufWritePost autocmd (default 1).
-- `g:gccide_source_root`    — **future (P3).** Where `.c`/`.cpp`/`.h`
-                              files live, for the identifier index.
-                              May differ from the Makefile directory.
-- `g:gccide_index_path`     — **future (P3).** Override `.gccide/index`
-                              location.
+- `g:gccide_source_root`    — where `.c`/`.cpp`/`.h` files live, for
+                              the identifier index. May differ from
+                              the Makefile directory. Falls back to
+                              `g:gccide_project_root` when unset.
+- `g:gccide_index_path`     — override the default
+                              `<project_root>/.gccide/index` location
+                              for the identifier index.
 
 ## Why these choices
 
