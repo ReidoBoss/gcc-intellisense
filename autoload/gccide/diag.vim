@@ -84,25 +84,29 @@ function! s:parse_diags(lines) abort
   return l:items
 endfunction
 
-function! s:on_exit(errfile, root, job, status) abort
-  " A newer save may have preempted this job; discard the result.
-  if s:current_job isnot a:job
-    call delete(a:errfile)
-    return
-  endif
-  let l:lines = filereadable(a:errfile) ? readfile(a:errfile) : []
-  call delete(a:errfile)
-  let s:current_job = v:null
+" Public: parse a list of stderr-style lines into diagnostic items.
+" Returns [{file, lnum, col, sev, text}, ...]. Shared with log.vim so
+" both the run-make and read-log paths use the same regex.
+function! gccide#diag#parse_lines(lines) abort
+  return s:parse_diags(a:lines)
+endfunction
 
+" Public: render `items` (from parse_lines) as signs + quickfix.
+" Resolves any relative file paths against `root` (pass '' to skip;
+" relative paths then fall through to the cwd). Used by both diag#run
+" and log#refresh.
+function! gccide#diag#publish(items, root) abort
   call s:ensure_defines()
   call s:clear_all_signs()
-
-  let l:items = s:parse_diags(l:lines)
   let l:qfitems = []
-  for l:d in l:items
-    " gcc emits paths relative to the Makefile's cwd. Resolve against
-    " the project root so signs match the buffer's absolute filename.
-    let l:abs = l:d.file =~# '^/' ? l:d.file : simplify(a:root . '/' . l:d.file)
+  for l:d in a:items
+    if l:d.file =~# '^/'
+      let l:abs = l:d.file
+    elseif !empty(a:root)
+      let l:abs = simplify(a:root . '/' . l:d.file)
+    else
+      let l:abs = l:d.file
+    endif
     let l:bufnr = bufnr(l:abs)
     if l:bufnr > 0 && bufloaded(l:bufnr)
       call s:place_sign(l:bufnr, l:d.lnum, s:severity_to_sign(l:d.sev))
@@ -117,6 +121,18 @@ function! s:on_exit(errfile, root, job, status) abort
   endfor
   call setqflist(l:qfitems, 'r')
   call setqflist([], 'a', {'title': 'gccide'})
+endfunction
+
+function! s:on_exit(errfile, root, job, status) abort
+  " A newer save may have preempted this job; discard the result.
+  if s:current_job isnot a:job
+    call delete(a:errfile)
+    return
+  endif
+  let l:lines = filereadable(a:errfile) ? readfile(a:errfile) : []
+  call delete(a:errfile)
+  let s:current_job = v:null
+  call gccide#diag#publish(gccide#diag#parse_lines(l:lines), a:root)
 endfunction
 
 function! gccide#diag#run() abort

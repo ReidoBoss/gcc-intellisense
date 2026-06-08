@@ -22,6 +22,11 @@ When walking the project, scanning, parsing, indexing, or grepping, only
 touch `.c`, `.cpp`, and `.h` files. Object files, build artifacts, and
 generated files are out of scope.
 
+**Exception**: the diagnostic log path at `g:gccide_log_path` (P7) is
+read with `readfile()`. Same file-format expectation as gcc stderr —
+the existing P2 regex parses it. No other non-source files are
+allowed.
+
 ## Diagnostics
 
 - The plugin runs the project's Makefile (via `g:gccide_make_cmd`,

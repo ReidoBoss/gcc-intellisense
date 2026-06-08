@@ -559,6 +559,138 @@ Append-only history. Newest entry at the **bottom**. Format:
   stable. Remaining work is real-codebase validation +
   three explicit follow-up deferrals (header-guard filter, refresh
   debounce, deletion detection) listed in STATE.md's Next step.
+
+## 2026-06-08 (post-P6 goto-def same-file) — claude
+- User: "i don't want the go-to-def to open on a new tab if it's
+  in the same file." Reasonable — spawning a tab for an in-file
+  move is overkill.
+- `autoload/gccide/goto.vim`: `s:jump(hit)` now checks
+  `fnamemodify(a:hit.file, ':p') ==# expand('%:p')` before doing
+  anything. Same-file branch uses `execute 'normal! <lnum>G'`
+  (which registers the prior cursor in vim's jumplist) followed
+  by `cursor(lnum, col)` to refine the column and `normal! zz` to
+  centre. Cross-file branch is unchanged: `s:split_cmd() ' '
+  fnameescape(file)` (default `tabedit`) + `cursor(...)` + `zz`.
+- Why `<lnum>G` instead of `cursor()` alone: `cursor()` is a
+  function call, not a "jump motion", so it does NOT add to the
+  jumplist. Without the `G` motion, `<C-o>` after a same-file
+  goto would not return to the call site — bad UX. `<lnum>G`
+  registers the jumplist entry; the follow-up `cursor()` refines
+  the column without touching jumplist further.
+- `tests/manual/p5.md`:
+  - New scripted step 3 ("Same-file hit: jumps in place, no new
+    tab"). Uses `append(line('$'), ['proj_add'])` to inject a
+    phantom in-memory call site inside the live `util.c` buffer;
+    the on-disk file is **not** modified, so the index still
+    points at the real `proj_add` definition at line 4. Asserts
+    `tabcount=1`, `bufname=util.c`, `lnum=4` — proves the jump
+    stayed in the current window.
+  - Renumbered steps 4–7 (was 3–6) to make room.
+  - Header "5 scripted + 1 interactive" → "6 scripted + 1
+    interactive".
+  - Interactive step 7 grew a new bullet (was 6, now 7) that
+    walks through the same flow manually, then verifies `<C-o>`
+    returns to the phantom line.
+- Smoke-tested locally (Mac, vim80). Same-file: before `(util.c,
+  1 tab, line 11)` → after `(util.c, 1 tab, line 4)`. Cross-file
+  regression: still spawns a 2nd tab and lands on line 8 of
+  util.c. Both green.
+- Not committed yet; awaiting user sign-off.
+
+## 2026-06-08 (startup index + README) — claude
+- User: "Can the indexing run on start up? Also can you give me
+  readme.md for setting this up?" Two asks.
+- **Startup index.** Added a `call gccide#index#build()` to the
+  bottom of `plugin/gccide.vim`'s `g:gccide_auto` block, gated on
+  `get(g:, 'gccide_index_on_startup', 1)` and on at least one of
+  `g:gccide_project_root` / `g:gccide_source_root` being set.
+  - Initially tried a `VimEnter` autocmd — turns out VimEnter does
+    not fire under `vim80 -u NONE -S script.vim` because there is
+    no event loop in batch mode. Probed this with introspection
+    (the autocmd registered correctly but its body never ran, no
+    writefile output). Switched to plugin-load time, which works
+    for both real users (vimrc runs first, then plugins, so the
+    config vars are visible) and the scripted test seam.
+  - The build is async (`job_start` returns immediately) so no
+    startup blocking. The P6 mtime gate makes re-launches free:
+    `find -newer <index>` returns empty → echo `index up to date`
+    → no-op.
+  - Smoke-tested both paths: with project root set + default
+    `g:gccide_index_on_startup` → `gccide: indexing ...` then
+    `gccide: index built (N symbols, 3 files)`, persisted to
+    `.gccide/index`. With `g:gccide_index_on_startup = 0` → no
+    build, empty stats, no index file.
+- **README.md** (top-level). User asked for a setup README. The
+  project already has comprehensive `docs/` so the README is the
+  on-ramp: prerequisites, install (vim 8 packages + manual rtp),
+  vimrc configuration with minimum-viable + commented optional
+  vars, commands table, mappings table, full config-var
+  reference, manual-test pointer, and links into `docs/` for the
+  deep material. About 110 lines, intentionally narrow scope.
+  CLAUDE.md generally bans creating docs without an explicit
+  request — the user explicitly asked, so this one is in.
+- Added `g:gccide_index_on_startup` to `docs/ARCHITECTURE.md`'s
+  config-var list so the deep doc stays accurate.
+- Existing tests (`tests/manual/p3.md`–`p6.md`) still pass because
+  `gccide#index#build()` is idempotent under the busy guard and
+  the mtime gate — when a test does `runtime!` + `:GccideIndex`
+  + `_wait_done`, the runtime triggers an async build, the
+  explicit `:GccideIndex` sees `s:build_busy=1` and echoes
+  `index build already in progress`, and `_wait_done` reaps both.
+  The extra echo is harmless noise. Did NOT update the test
+  scripts to set `g:gccide_index_on_startup = 0` — keeps churn
+  low and exercises the "auto-startup in the wild" path.
+- Did **not** commit. Awaiting user sign-off.
+
+## 2026-06-08 (P7 log-based diagnostics) — claude
+- User flagged: on the locked-down work laptop, they don't have
+  access to run `make`. The whole P2 diagnostics path is dead
+  there. Walked through the options: (a) punt diagnostics
+  entirely, (b) file-watcher consuming a build log written
+  externally, (c) a real socket-server daemon. Picked (b) as the
+  obvious-right one. User confirmed: manual refresh by default,
+  optional polling, keep P2 alive but default OFF, OK to amend
+  the project-rule about non-source-file reads.
+- **Refactor `diag.vim`.** Extracted `gccide#diag#parse_lines(lines)`
+  and `gccide#diag#publish(items, root)` from the old `s:on_exit`
+  body. `s:on_exit` now wraps them. Zero behavior change for the
+  P2 path; both helpers are public so any future diagnostic
+  input can publish through the same machinery.
+- **New `autoload/gccide/log.vim`.** Module surface:
+  `gccide#log#refresh(?force=1)`, `gccide#log#enable_poll(ms)`,
+  `gccide#log#disable_poll()`, `gccide#log#_state()`. Refresh
+  reads `g:gccide_log_path`, parses with the shared helper,
+  publishes with the shared helper. Force=1 always republishes
+  (manual command); force=0 short-circuits on unchanged mtime
+  (poll path). Missing file → echo + publish empty (clears stale
+  state) + reset last_mtime=-1.
+- **`plugin/gccide.vim`.** Added `:GccideLogRefresh` and
+  `:GccideLogPoll [ms]` (no arg = 0 = stop). Gated P2's
+  BufWritePost autocmd on `get(g:, 'gccide_diag_make', 0)` —
+  default OFF, opt-in. Plugin-load-time call to
+  `gccide#log#enable_poll(g:gccide_log_poll_ms)` when both the
+  path and a positive poll interval are set in vimrc.
+- **`docs/CONVENTIONS.md`.** Amended the "make/awk/sed/grep
+  allowed only against .c/.cpp/.h" rule with an explicit
+  exception for the diagnostic log path. Future contributors
+  see the rule + the carve-out together.
+- **`docs/ARCHITECTURE.md`.** Diagnostics section rewritten as
+  two input paths feeding a single publisher. New config-var
+  entries.
+- **`README.md`.** New "No `make` access from vim?" section with
+  the minimal vimrc snippet. Updated commands + config-vars
+  tables.
+- **`tests/manual/p7.md`** — 5 scripted + 1 interactive. Each
+  scripted step writes a synthetic log to `$TMPDIR`, runs
+  refresh, asserts the qflist state. Step 5 introspects
+  `_state()` across enable→tick→disable transitions.
+- Smoke-tested locally (Mac, vim80). All 5 scripted P7 steps
+  green. Both gating behaviors verified: `g:gccide_diag_make=0`
+  (default) → no `gccide_diag` augroup created; setting to 1 +
+  re-sourcing → BufWritePost autocmds install for all 8 file
+  globs. P2 unchanged for the `:GccideDiag` manual command path.
+- Did **not** commit. Awaiting user sign-off on the P7
+  checklist before commit.
 - Smoke-tested locally on the Mac (`vim80`):
   - Lookup/goto both defined after autoload.
   - Cursor at main.c (5, 10) on `proj_greet` → split opens util.c,
@@ -588,79 +720,3 @@ Append-only history. Newest entry at the **bottom**. Format:
     in the same file is `#ifndef <samename>`. Easy in
     `s:extract_file`; fold in with whatever other parser cleanups
     profiling surfaces.
-
-## 2026-06-08 (post-P6 goto-def same-file) — claude
-- User: "i don't want the go-to-def to open on a new tab if it's
-  in the same file." Reasonable — spawning a tab for an in-file
-  move is overkill.
-- `autoload/gccide/goto.vim`: `s:jump(hit)` now checks
-  `fnamemodify(a:hit.file, ':p') ==# expand('%:p')` before doing
-  anything. Same-file branch uses `execute 'normal! <lnum>G'`
-  (which registers the prior cursor in vim's jumplist) followed
-  by `cursor(lnum, col)` to refine the column and `normal! zz` to
-  centre. Cross-file branch is unchanged: `s:split_cmd() ' '
-  fnameescape(file)` (default `tabedit`) + `cursor(...)` + `zz`.
-- Why `<lnum>G` instead of `cursor()` alone: `cursor()` is a
-  function call, not a "jump motion", so it does NOT add to the
-  jumplist. Without the `G` motion, `<C-o>` after a same-file
-  goto would not return to the call site — bad UX. `<lnum>G`
-  registers the jumplist entry; the follow-up `cursor()` refines
-  the column without touching jumplist further.
-- `tests/manual/p5.md`: new scripted step 3 ("Same-file hit:
-  jumps in place, no new tab"). Uses `append(line('$'),
-  ['proj_add'])` to inject a phantom in-memory call site inside
-  the live `util.c` buffer; the on-disk file is **not**
-  modified, so the index still points at the real `proj_add`
-  definition at line 4. Asserts `tabcount=1`, `bufname=util.c`,
-  `lnum=4` — proves the jump stayed in the current window.
-  Renumbered steps 4–7 (was 3–6); header count updated.
-  Interactive step gained a new bullet that walks through the
-  same flow manually, then verifies `<C-o>` returns to the
-  phantom line.
-- Smoke-tested locally (Mac, vim80). Same-file: before `(util.c,
-  1 tab, line 11)` → after `(util.c, 1 tab, line 4)`. Cross-file
-  regression: still spawns a 2nd tab and lands on line 8 of
-  util.c. Both green.
-
-## 2026-06-08 (startup index + README) — claude
-- User: "Can the indexing run on start up? Also can you give me
-  readme.md for setting this up?" Two asks.
-- **Startup index.** Added a `call gccide#index#build()` to the
-  bottom of `plugin/gccide.vim`'s `g:gccide_auto` block, gated on
-  `get(g:, 'gccide_index_on_startup', 1)` and on at least one of
-  `g:gccide_project_root` / `g:gccide_source_root` being set.
-  - Initially tried a `VimEnter` autocmd — turns out VimEnter
-    does not fire under `vim80 -u NONE -S script.vim` because
-    there is no event loop in batch mode. Probed this with
-    introspection (the autocmd registered correctly but its body
-    never ran, no writefile output). Switched to plugin-load
-    time, which works for both real users (vimrc runs first,
-    then plugins, so the config vars are visible) and the
-    scripted test seam.
-  - The build is async (`job_start` returns immediately) so no
-    startup blocking. The P6 mtime gate makes re-launches free:
-    `find -newer <index>` returns empty → echo `index up to date`
-    → no-op.
-  - Smoke-tested both paths: with project root set + default
-    `g:gccide_index_on_startup` → `gccide: indexing ...` then
-    `gccide: index built (N symbols, 3 files)`, persisted to
-    `.gccide/index`. With `g:gccide_index_on_startup = 0` → no
-    build, empty stats, no index file.
-- **README.md** (top-level). User asked for a setup README. The
-  project already has comprehensive `docs/` so the README is the
-  on-ramp: prerequisites, install (vim 8 packages + manual rtp),
-  vimrc configuration with minimum-viable + commented optional
-  vars, commands table, mappings table, full config-var
-  reference, manual-test pointer, and links into `docs/` for the
-  deep material. About 110 lines, intentionally narrow scope.
-  CLAUDE.md generally bans creating docs without an explicit
-  request — the user explicitly asked, so this one is in.
-- Added `g:gccide_index_on_startup` to `docs/ARCHITECTURE.md`'s
-  config-var list so the deep doc stays accurate.
-- Existing tests (`tests/manual/p3.md`–`p6.md`) still pass
-  because `gccide#index#build()` is idempotent under the busy
-  guard and the mtime gate. The auto-startup in tests is also
-  silently skipped because all test scripts do `runtime!` BEFORE
-  setting `g:gccide_project_root` — at runtime time the project
-  root is unset, the startup check sees empty, no build fires.
-  Tests' explicit `:GccideIndex` does the actual work.

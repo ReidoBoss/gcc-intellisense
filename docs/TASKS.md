@@ -53,3 +53,12 @@ a time, since agents run sequentially.
 - [x] Incremental re-index on save.
 - [x] mtime-keyed cache invalidation throughout.
 - [x] Write `tests/manual/p6.md`.
+
+## P7 — Log-based diagnostics
+- [x] Refactor `diag.vim` to expose `gccide#diag#publish(items, root)`
+      and `gccide#diag#parse_lines(lines)`.
+- [x] New `autoload/gccide/log.vim` reading `g:gccide_log_path`.
+- [x] `:GccideLogRefresh` (manual) and `:GccideLogPoll <ms>` (optional).
+- [x] Make P2 BufWritePost autocmd opt-in via `g:gccide_diag_make`
+      (default off).
+- [x] Write `tests/manual/p7.md`.

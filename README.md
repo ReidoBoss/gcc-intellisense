@@ -72,15 +72,17 @@ That's it. Open a `.c`/`.cpp`/`.h` buffer and you're running:
 
 ## Commands
 
-| Command            | What it does                                   |
-| ------------------ | ---------------------------------------------- |
-| `:GccideStatus`    | Sanity check. Echoes `alive`.                  |
-| `:GccideFlags`     | Show the compile flags extracted for the current buffer. |
-| `:GccideDiag`      | Run the diagnostic build now.                  |
-| `:GccideDiagClear` | Wipe diagnostic signs + quickfix.              |
-| `:GccideIndex`     | Build (or refresh) the identifier index.       |
-| `:GccideFind <sym>`| Quickfix-list every definition of `<sym>`.     |
-| `:GccideGoto`      | Same as the `gd` mapping (jump to definition under cursor). |
+| Command              | What it does                                   |
+| -------------------- | ---------------------------------------------- |
+| `:GccideStatus`      | Sanity check. Echoes `alive`.                  |
+| `:GccideFlags`       | Show the compile flags extracted for the current buffer. |
+| `:GccideDiag`        | Run the project Makefile now and surface diagnostics. |
+| `:GccideDiagClear`   | Wipe diagnostic signs + quickfix.              |
+| `:GccideIndex`       | Build (or refresh) the identifier index.       |
+| `:GccideFind <sym>`  | Quickfix-list every definition of `<sym>`.     |
+| `:GccideGoto`        | Same as the `gd` mapping (jump to definition under cursor). |
+| `:GccideLogRefresh`  | Read `g:gccide_log_path` and republish signs + quickfix. |
+| `:GccideLogPoll <ms>`| Start a polling timer at N ms (`0` to stop). Mtime-gated. |
 
 ## Mappings
 
@@ -108,7 +110,34 @@ nmap <leader>gd <Plug>(gccide-goto-def)
 | `g:gccide_index_path`       | `<project_root>/.gccide/index` | Override the index file location. |
 | `g:gccide_split_cmd`        | `'tabedit'`   | Open command for cross-file go-to-def. Set `'split'` or `'vsplit'` for in-window splits. |
 | `g:gccide_index_on_startup` | `1`           | Auto-build the index when the plugin loads. |
-| `g:gccide_auto`             | `1`           | Master switch: install the BufWritePost autocmds, the FileType omnifunc autocmd, the default `gd` mapping, and the startup index build. Set to 0 to wire everything manually. |
+| `g:gccide_diag_make`        | `0`           | When 1, install the BufWritePost autocmd that runs `g:gccide_make_cmd` on every save. Off by default — many users don't have build access from vim. |
+| `g:gccide_log_path`         | _(unset)_     | Absolute path to a build log file (typically `make 2> /tmp/build.log`). When set, enables `:GccideLogRefresh` and the polling timer. |
+| `g:gccide_log_poll_ms`      | `0`           | Milliseconds between automatic `:GccideLogRefresh` calls. `0` = manual only. Mtime-gated. |
+| `g:gccide_auto`             | `1`           | Master switch: install all autocmds, the default `gd` mapping, and the startup index build. Set to 0 to wire everything manually. |
+
+## No `make` access from vim? Read the build log instead.
+
+For locked-down environments where the build runs elsewhere
+(remote build server, CI, an isolated shell), you can still get
+diagnostics by pointing the plugin at a log file:
+
+```vim
+let g:gccide_log_path     = '/abs/path/to/build.log'
+let g:gccide_project_root = '/abs/path/to/your/source/root'  " for resolving relative paths
+" Optional: poll the log automatically every 2 seconds.
+" let g:gccide_log_poll_ms = 2000
+```
+
+Whatever runs your build redirects gcc's stderr there
+(`make 2> /abs/path/to/build.log`, or your build wrapper's
+`tee`-style logging). Inside vim, `:GccideLogRefresh` re-reads
+the file and republishes signs + quickfix. Or set
+`g:gccide_log_poll_ms` and vim polls on a timer (mtime-gated,
+so polls against an unchanged file are free).
+
+The autocomplete + go-to-def stack works regardless — those only
+need `g:gccide_source_root` to walk the tree. You get
+~75% of the plugin's value with no `make` access at all.
 
 ## Verification
 

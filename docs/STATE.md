@@ -3,26 +3,88 @@
 > Always read this file first. Always update it before you stop.
 
 ## Current phase
-**P6 — Performance shipped.** Incremental re-index on `BufWritePost`
-(re-extracts just the saved file, splices into `s:idx`, re-persists).
-mtime-gated `:GccideIndex` (find -newer short-circuits when nothing
-changed). Baseline timings captured in `tests/manual/p6.md` step 5
-for future comparison against the firmware codebase.
+**P7 — Log-based diagnostics shipped.** For locked-down environments
+where the plugin can't run `make` itself (firmware work-laptop
+case). User points `g:gccide_log_path` at a stderr log produced by
+their build (anywhere), runs `:GccideLogRefresh` to publish signs +
+quickfix from it. Optional `:GccideLogPoll <ms>` adds a mtime-gated
+polling timer. P2 BufWritePost autocmd is now opt-in via
+`g:gccide_diag_make` (default 0) so the two diagnostic input paths
+don't fight.
 
-**Post-P6 polish (same session):** go-to-def now jumps in place
-(same window, no new tab) when the definition lives in the current
-buffer. Prior cursor position is pushed to the jumplist via
-`<lnum>G`, so `<C-o>` walks back. Cross-file behavior unchanged
-(still `tabedit`). User feedback drove the change.
-`tests/manual/p5.md` gains a scripted "same-file" step 3 (uses
-`append()` to inject a phantom in-memory call without modifying
-the on-disk fixture) and a corresponding interactive step.
+`autoload/gccide/diag.vim` was lightly refactored to expose
+`gccide#diag#publish(items, root)` + `gccide#diag#parse_lines(lines)`
+so both inputs (P2's job exit_cb and P7's log reader) share the
+sign/qflist publishing code.
 
-All roadmap phases (P0–P6) are now ticked in `TASKS.md`. Plugin
+All roadmap phases (P0–P7) are now ticked in `TASKS.md`. Plugin
 surface area is stable; remaining work is real-codebase validation
-and the explicit "not in scope" deferrals listed below.
+and the explicit deferrals listed below.
 
 ## Last agent
+claude (2026-06-08) — P7 log-based diagnostics:
+- `autoload/gccide/diag.vim` — extracted two public helpers from
+  `s:on_exit`: `gccide#diag#parse_lines(lines)` returns the items
+  list (file, lnum, col, sev, text), and `gccide#diag#publish(items,
+  root)` ensures the sign defines exist, clears prior signs, then
+  places + qflist-pushes each item (resolving relative file paths
+  against `root`). `s:on_exit` is now a thin wrapper:
+  `gccide#diag#publish(gccide#diag#parse_lines(lines), root)`.
+- `autoload/gccide/log.vim` — new module.
+  `gccide#log#refresh(?force=1)` reads `g:gccide_log_path`, parses
+  via the shared helper, publishes via the shared helper. Honors
+  an mtime cache: force=1 (the manual command path) always
+  republishes; force=0 (the poll path) is a no-op when mtime
+  hasn't changed since the last read. Missing log file → echo +
+  publish empty items (clears any stale state). Public helpers:
+  `enable_poll(ms)` / `disable_poll()` / `_state()` (test seam).
+- `plugin/gccide.vim`:
+  - New commands `:GccideLogRefresh` and `:GccideLogPoll [ms]`
+    (no-arg form = 0 = stop).
+  - **Changed default**: P2 BufWritePost autocmd is no longer
+    installed by default. Gated on
+    `get(g:, 'gccide_diag_make', 0)`. Existing manual
+    `:GccideDiag` command path is unchanged — only the
+    auto-on-save trigger moved to opt-in.
+  - When both `g:gccide_log_path` is set and
+    `g:gccide_log_poll_ms > 0`, plugin-load-time call to
+    `gccide#log#enable_poll()` starts the timer.
+- `docs/CONVENTIONS.md` — amended the
+  "make/awk/sed/grep allowed only against .c/.cpp/.h" rule with
+  an explicit exception for `g:gccide_log_path`. Per the user.
+- `docs/ARCHITECTURE.md` — "Diagnostics engine" section rewritten
+  to describe both input paths (run-make + read-log) feeding a
+  single publisher. Added config-var entries for
+  `g:gccide_diag_make`, `g:gccide_log_path`, `g:gccide_log_poll_ms`.
+- `README.md` — added a "No `make` access from vim?" section with
+  the minimal vimrc, updated commands table, updated config-var
+  table.
+- `tests/manual/p7.md` — 5 scripted + 1 interactive. Covers
+  surfaces, refresh-from-synthetic-log (sees both an error and a
+  warning), refresh after log replacement (old diagnostics
+  cleared), empty-log clears qf, polling enable/tick/disable
+  with `_state()` introspection, interactive walkthrough with
+  external log edits + optional polling.
+
+## Smoke results (Mac, vim80)
+- Step 1: all four new/exposed surfaces defined (1/1/1/1).
+- Step 2: synthetic log with E + W → `qf_len=2`, qf0 is
+  `main.c:5:5 type=E text="error: implicit declaration of
+  function 'proj_greet'"`, qf1 is `util.c:8:1 type=W text="warning:
+  unused parameter 'who'"`.
+- Step 3: log replaced with a single new entry → `qf_len=1`, only
+  the new error. Old state evicted (every refresh replaces).
+- Step 4: empty log → `qf_len=0`.
+- Step 5: polling — `before` polling=0; `after_enable` polling=1
+  poll_ms=200 last_mtime=-1; after 400ms sleep last_mtime is
+  populated (unix epoch); `after_disable` polling=0 poll_ms=0.
+- Gate behaviors verified: with default
+  `g:gccide_diag_make=0`, the `gccide_diag` augroup doesn't
+  exist (E216 from `au gccide_diag`). With `g:gccide_diag_make=1`
+  set before `runtime!`, the BufWritePost autocmd installs for
+  all 8 file globs.
+
+## Previous (P6)
 claude (2026-06-08) — P6:
 - `autoload/gccide/index.vim`:
   - Added `gccide#index#refresh_file(file)`. Drops every entry in
@@ -169,26 +231,24 @@ claude (2026-06-08) — P4:
   in `main.c`.
 
 ## Next step
-1. User runs `tests/manual/p6.md` locally (6 scripted + 1
+1. User runs `tests/manual/p7.md` locally (5 scripted + 1
    interactive). Capture any failure in `docs/JOURNAL.md` first.
-2. Validate on the real firmware codebase. Re-run step 5's
-   timing block there and append the numbers to STATE.md so we
-   have a real-world baseline to regress against. Also verify
-   the multi-hit go-to-def quickfix path (the fixture has no
-   multi-defined symbol).
-3. Optional follow-ups (none of these are P6 — they are deferred
-   polish work):
-   - **Header-guard filter** in `s:extract_file`: drop a `#define
-     UPPER` when the prior non-blank line in the same file is
-     `#ifndef UPPER`. Cleans `PROJ_H` out of `PROJ_`-prefix
-     completions.
+2. Validate on the real firmware codebase. The intended
+   workflow there: vimrc sets `g:gccide_source_root` (read-only
+   sources) and `g:gccide_log_path` (whatever the build dumps).
+   No `g:gccide_project_root` needed if there's no make to run;
+   `g:gccide_diag_make` stays 0. Confirm autocomplete + goto-def
+   work and that log-based diagnostics surface when the build
+   completes.
+3. Optional follow-ups (deferred):
+   - **Header-guard filter** in `s:extract_file`.
    - **Refresh debounce** if rapid saves on big files prove
-     noticeable. Currently every `:w` runs `s:extract_file` +
-     `s:persist`; a 100 ms `timer_start` cancel/reset would
-     collapse bursts.
-   - **Deletion detection** for the mtime gate: rare enough that
-     `rm -rf .gccide/index && :GccideIndex` is the documented
-     workaround.
+     noticeable.
+   - **Deletion detection** for the mtime gate.
+   - **Live log tailing** (vs. polling) — use `job_start tail -f`
+     and consume incrementally instead of re-reading the whole
+     file. Would matter for very large logs; polling is fine for
+     typical builds.
 
 ## Recent decisions
 - Agents run sequentially, not in parallel.
@@ -341,3 +401,23 @@ claude (2026-06-08) — P4:
   conventions, journal, state, roadmap). The README links to
   those at the bottom so a new contributor lands on the right
   page.
+- **P7 diagnostics input is split from publish.** Both the run-
+  make path (P2) and the read-log path (P7) call
+  `gccide#diag#publish(items, root)`, so signs + qflist behavior
+  is identical regardless of input. Future inputs (live log
+  tailing, LSP-shaped JSON, …) can land by adding another caller
+  of the same publisher.
+- **P2 BufWritePost autocmd is now opt-in** via
+  `g:gccide_diag_make = 1`. Default off. The primary user can't
+  run `make` from vim on the work laptop; defaulting the autocmd
+  off keeps a confused new install from echoing
+  "gccide: g:gccide_project_root not set" on every save. The
+  explicit `:GccideDiag` command path is unchanged.
+- **P7 polling is mtime-gated.** The poll fires `refresh(0)`
+  which reads `getftime(path)` and skips the file read + publish
+  when mtime is unchanged since last poll. Polls against a
+  static log are essentially free; the actual work only happens
+  when the build server writes a new log.
+- **P7 manual refresh always republishes** (`force=1`). This
+  matters when the user wants to clear stale signs from the
+  current session without waiting for a poll tick.

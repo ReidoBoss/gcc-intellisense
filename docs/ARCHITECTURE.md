@@ -42,6 +42,10 @@ Each component maps to a phase in `ROADMAP.md`.
 - Cache the result in `.gccide/flags`, keyed by the Makefile's mtime.
 
 ### 3. Diagnostics engine
+
+Two parallel input sources, one publisher:
+
+**a. Run-make-on-save (P2, opt-in via `g:gccide_diag_make = 1`).**
 - On `BufWritePost`, run `g:gccide_make_cmd` (default `make`) async via
   `job_start(['sh','-c','cd <root> && <cmd>'], ...)` with `out_io=null`
   and `err_io=file` (a tempfile).
@@ -50,9 +54,27 @@ Each component maps to a phase in `ROADMAP.md`.
 - A repeating 100 ms pulse timer calls `job_status()` on the live job
   so vim's main loop reaps the exited child promptly (without it,
   interactive users see multi-second delays).
-- On exit, parse stderr lines matching
-  `<abs-path>:<line>:<col>: (fatal error|error|warning|note): msg`.
-  Signs (`E>`/`W>`/`N>`) land in any loaded buffer whose absolute path
+- Off by default; many users (notably the firmware-laptop case)
+  don't have build access from vim.
+
+**b. Read-log-file (P7, opt-in via `g:gccide_log_path`).**
+- For environments where vim can't run `make` itself. The build
+  runs elsewhere (a server, a wrapper script) and dumps stderr to
+  a log file the user controls (`make 2> /tmp/build.log`).
+- `:GccideLogRefresh` reads the file once and publishes.
+- `:GccideLogPoll <ms>` starts an optional polling timer
+  (mtime-gated, no-op when the log hasn't changed). `:GccideLogPoll 0`
+  stops it. `g:gccide_log_poll_ms` set in the vimrc auto-starts
+  the timer at plugin-load time.
+- No `BufWritePost` trigger — the build is asynchronous to vim,
+  so save isn't the right signal.
+
+**Shared publisher.** Both paths call `gccide#diag#publish(items, root)`:
+- Parse stderr lines matching
+  `<path>:<line>:<col>: (fatal error|error|warning|note): msg`
+  (`gccide#diag#parse_lines()`).
+- Relative paths resolve against `root` (the project root).
+- Signs (`E>`/`W>`/`N>`) land in any loaded buffer whose absolute path
   matches a diagnostic. The quickfix list gets every entry regardless
   of buffer state.
 
@@ -156,6 +178,24 @@ that.
                               changed since the last persist. Set
                               to 0 in your vimrc (before the
                               plugin loads) to opt out.
+- `g:gccide_diag_make`      — when set to 1, installs the P2
+                              BufWritePost autocmd that runs
+                              `g:gccide_make_cmd` on every save.
+                              Default 0 — many users don't have
+                              build access from vim.
+- `g:gccide_log_path`       — absolute path to a build log file
+                              (typically `make 2> /path/to/log`).
+                              When set, enables `:GccideLogRefresh`
+                              and (if `g:gccide_log_poll_ms > 0`)
+                              the polling timer. Read-only — the
+                              plugin never writes to the log.
+- `g:gccide_log_poll_ms`    — milliseconds between automatic
+                              `:GccideLogRefresh` calls. Default 0
+                              (no polling — manual only). Set to
+                              e.g. 2000 to poll every 2s. The
+                              poller is mtime-gated, so polls
+                              against an unchanged file are
+                              essentially free.
 
 ## Why these choices
 
