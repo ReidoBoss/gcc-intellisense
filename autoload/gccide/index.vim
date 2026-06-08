@@ -9,8 +9,15 @@ let s:idx = {}
 let s:idx_loaded_from = ''
 let s:find_job   = v:null
 let s:find_lines = []
+let s:check_job   = v:null
+let s:check_lines = []
 let s:build_busy = 0
 let s:pulse_timer = -1
+
+" Shared find predicates: -type f with all the C/C++ name globs.
+function! s:find_predicates() abort
+  return "-type f \\( -name '*.c' -o -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' -o -name '*.h' -o -name '*.hpp' -o -name '*.hh' -o -name '*.hxx' \\)"
+endfunction
 
 " --- Roots + paths ----------------------------------------------------
 
@@ -200,13 +207,16 @@ function! s:ensure_pulse() abort
 endfunction
 
 function! s:pulse(tid) abort
-  if s:find_job is v:null && !s:build_busy
+  if s:find_job is v:null && s:check_job is v:null && !s:build_busy
     call timer_stop(s:pulse_timer)
     let s:pulse_timer = -1
     return
   endif
   if s:find_job isnot v:null
     call job_status(s:find_job)
+  endif
+  if s:check_job isnot v:null
+    call job_status(s:check_job)
   endif
 endfunction
 
@@ -262,6 +272,39 @@ function! s:parse_chunk_cb(files, start, tid) abort
   call s:parse_chunk(a:files, a:start)
 endfunction
 
+function! s:do_full_build(src) abort
+  let s:build_busy = 1
+  let s:find_lines = []
+  let l:find = 'find . ' . s:find_predicates()
+  let l:cmd = ['sh', '-c', 'cd ' . shellescape(a:src) . ' && ' . l:find]
+  echom 'gccide: indexing ' . a:src . ' ...'
+  let s:find_job = job_start(l:cmd, {
+        \ 'in_io':   'null',
+        \ 'out_cb':  function('s:on_find_out'),
+        \ 'exit_cb': function('s:on_find_exit', [a:src]),
+        \ })
+  call s:ensure_pulse()
+endfunction
+
+function! s:on_check_out(ch, msg) abort
+  for l:line in split(a:msg, "\n")
+    if !empty(l:line) | call add(s:check_lines, l:line) | endif
+  endfor
+endfunction
+
+function! s:on_check_exit(src, job, status) abort
+  if s:check_job isnot a:job | return | endif
+  let s:check_job = v:null
+  let l:lines = copy(s:check_lines)
+  let s:check_lines = []
+  if empty(l:lines)
+    let s:build_busy = 0
+    echom 'gccide: index up to date'
+    return
+  endif
+  call s:do_full_build(a:src)
+endfunction
+
 function! gccide#index#build() abort
   if s:build_busy
     echom 'gccide: index build already in progress'
@@ -278,17 +321,21 @@ function! gccide#index#build() abort
     echohl WarningMsg | echom 'gccide: source root does not exist: ' . l:src | echohl None
     return
   endif
-  let s:build_busy = 1
-  let s:find_lines = []
-  let l:find = "find . -type f \\( -name '*.c' -o -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' -o -name '*.h' -o -name '*.hpp' -o -name '*.hh' -o -name '*.hxx' \\)"
-  let l:cmd = ['sh', '-c', 'cd ' . shellescape(l:src) . ' && ' . l:find]
-  echom 'gccide: indexing ' . l:src . ' ...'
-  let s:find_job = job_start(l:cmd, {
-        \ 'in_io':   'null',
-        \ 'out_cb':  function('s:on_find_out'),
-        \ 'exit_cb': function('s:on_find_exit', [l:src]),
-        \ })
-  call s:ensure_pulse()
+  let l:idx_path = s:index_path()
+  if !empty(l:idx_path) && filereadable(l:idx_path)
+    let s:build_busy = 1
+    let s:check_lines = []
+    let l:find = 'find . -newer ' . shellescape(l:idx_path) . ' ' . s:find_predicates() . ' | head -n 1'
+    let l:cmd = ['sh', '-c', 'cd ' . shellescape(l:src) . ' && ' . l:find]
+    let s:check_job = job_start(l:cmd, {
+          \ 'in_io':   'null',
+          \ 'out_cb':  function('s:on_check_out'),
+          \ 'exit_cb': function('s:on_check_exit', [l:src]),
+          \ })
+    call s:ensure_pulse()
+    return
+  endif
+  call s:do_full_build(l:src)
 endfunction
 
 " --- Lookup -----------------------------------------------------------
@@ -318,6 +365,42 @@ function! gccide#index#find(sym) abort
   call setqflist(l:items, 'r')
   call setqflist([], 'a', {'title': 'gccide-find:' . a:sym})
   copen
+endfunction
+
+" --- Incremental refresh (consumed by BufWritePost autocmd) ----------
+
+" Re-extracts a single file in place: drops any existing entries that
+" point at this file, splices in the freshly extracted ones, persists.
+" Silent no-op when there is no index to refresh (the user must run
+" :GccideIndex first) or the file is outside the source root.
+function! gccide#index#refresh_file(file) abort
+  if empty(s:idx)
+    if !s:load() | return | endif
+  endif
+  let l:src = gccide#index#source_root()
+  if empty(l:src) | return | endif
+  let l:abs = fnamemodify(a:file, ':p')
+  if stridx(l:abs, l:src . '/') != 0 | return | endif
+  if !filereadable(l:abs) | return | endif
+  let l:to_remove = []
+  for [l:name, l:hits] in items(s:idx)
+    let l:kept = filter(copy(l:hits), 'v:val.file !=# l:abs')
+    if empty(l:kept)
+      call add(l:to_remove, l:name)
+    else
+      let s:idx[l:name] = l:kept
+    endif
+  endfor
+  for l:name in l:to_remove
+    call remove(s:idx, l:name)
+  endfor
+  for l:s in s:extract_file(l:abs)
+    if !has_key(s:idx, l:s.name)
+      let s:idx[l:s.name] = []
+    endif
+    call add(s:idx[l:s.name], {'file': l:s.file, 'lnum': l:s.lnum, 'col': l:s.col, 'kind': l:s.kind})
+  endfor
+  call s:persist()
 endfunction
 
 " --- Exact-name lookup (consumed by goto.vim) ------------------------
@@ -363,8 +446,9 @@ endfunction
 
 function! gccide#index#_wait_done(timeout_ms) abort
   let l:elapsed = 0
-  while (s:find_job isnot v:null || s:build_busy) && l:elapsed < a:timeout_ms
-    if s:find_job isnot v:null | call job_status(s:find_job) | endif
+  while (s:find_job isnot v:null || s:check_job isnot v:null || s:build_busy) && l:elapsed < a:timeout_ms
+    if s:find_job isnot v:null  | call job_status(s:find_job)  | endif
+    if s:check_job isnot v:null | call job_status(s:check_job) | endif
     sleep 50m
     let l:elapsed += 50
   endwhile

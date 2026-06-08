@@ -487,6 +487,78 @@ Append-only history. Newest entry at the **bottom**. Format:
   go-to-def section + added `g:gccide_split_cmd` to the config-var
   list. Re-smoke green: step 2 → tabcount=2 tabnr=2, steps 3/4 →
   tabcount=1.
+- User committed P5 (`946e096`): 9 files, +651/-74, message
+  "add P5 go-to-definition: gd opens definition in a new tab".
+- Also flagged: `.gitignore` only ignored `*.swp`/`.*.swp`; vim
+  cycles through `.swo`/`.swn` when multiple swaps exist. User
+  asked to widen — committed `f377e8f` changing both patterns to
+  `*.sw[a-p]` / `.*.sw[a-p]`. Pre-existing stale
+  `tests/fixtures/proj/src/.main.c.swo` is now ignored.
+
+## 2026-06-08 (P6) — claude
+- Shipped P6 (performance). Three deliverables from TASKS.md:
+  incremental re-index on save, mtime-keyed cache invalidation,
+  and a baseline profile. No new external tools — still only
+  `sh`, `find`, and `head` (added to the existing find-pipeline).
+- **Incremental re-index on save.**
+  `autoload/gccide/index.vim` gains `gccide#index#refresh_file(file)`.
+  Lazy-loads `s:idx` from disk if empty; bails when there's
+  nothing to refresh against. Validates the file is under the
+  source root + readable. Drops all entries pointing at the file
+  (two-pass to avoid mutating `s:idx` during `items()` iteration:
+  collect names whose hit list goes empty, remove afterward),
+  re-runs `s:extract_file`, splices fresh entries back, calls
+  `s:persist()`. `plugin/gccide.vim` adds a `gccide_index`
+  augroup with `BufWritePost *.c,*.cpp,*.cc,*.cxx,*.h,*.hpp,*.hh,*.hxx`
+  invoking `gccide#index#refresh_file(expand('<afile>:p'))`.
+- **mtime-gated `:GccideIndex`.** Restructured the build pipeline
+  into a two-phase async flow. `gccide#index#build()` is now the
+  thin entry: it checks for an existing `.gccide/index`; if
+  present, kicks off `find . -newer <index> ... | head -n 1` via
+  a new `s:check_job`. On exit, empty stdout → `gccide: index up
+  to date` echo + `s:build_busy = 0` + bail. Non-empty → calls
+  `s:do_full_build(src)` (the prior body). When there's no
+  on-disk index (cold start), we skip the check and full-build
+  directly.
+  - Added `s:check_job`, `s:check_lines` script-local state.
+  - Pulse timer and `_wait_done(ms)` extended to track both
+    `s:find_job` and `s:check_job` so the manual test seam still
+    works under `vim80 -S`.
+  - Extracted `s:find_predicates()` so both find calls share the
+    `-name '*.c' -o …` list.
+  - Note: the gate uses `head -n 1` to short-circuit the find
+    output on large changesets — saves buffering MB into
+    `s:check_lines` only to throw it away. SIGPIPE to find is
+    fine; we never check exit status (only stdout emptiness).
+- **Baseline timings.** `tests/manual/p6.md` step 5 wraps four
+  hotspots in `reltime()` and `reltimestr()`:
+  - `full_build`        (cold)
+  - `refresh_file`      (single-file path)
+  - `candidates`×1000   (omnifunc prefix match)
+  - `lookup`×1000       (exact-name lookup)
+  Numbers on the bundled fixture (Mac, vim80): 78 ms / 5 ms /
+  116 ms (≈ 0.12 ms/call) / 7 ms (≈ 0.007 ms/call). These are
+  the baseline to re-record against the firmware codebase. The
+  `full_build` time is dominated by `_wait_done`'s 50 ms poll
+  granularity, not parsing — the fixture is too small for the
+  actual cost to matter.
+- `tests/manual/p6.md` — 6 scripted + 1 interactive. Covers
+  surfaces, full build + persistence, mtime gate echo behavior,
+  refresh add/remove, timing baselines, BufWritePost end-to-end
+  (`append` + `:write` inside vim → `candidates('proj_')` rises
+  from 2 to 3 + `lookup('new')` returns 1), and an interactive
+  type-save-complete walkthrough. Fixture restored via
+  `git checkout --` at the end of any step that modifies it.
+- Smoke-tested locally on the Mac. All 6 scripted steps green:
+  surfaces (1/1), 5 symbols 3 files, `index up to date` echo,
+  before=2 after=3 restored=2, timings above, BufWritePost
+  after_save=3 new_lookup=1.
+- Did **not** commit. CLAUDE.md says ask first; waiting on user
+  sign-off on the P6 checklist before commit.
+- All P0–P6 boxes in TASKS.md are now ticked. Plugin surface is
+  stable. Remaining work is real-codebase validation +
+  three explicit follow-up deferrals (header-guard filter, refresh
+  debounce, deletion detection) listed in STATE.md's Next step.
 - Smoke-tested locally on the Mac (`vim80`):
   - Lookup/goto both defined after autoload.
   - Cursor at main.c (5, 10) on `proj_greet` → split opens util.c,

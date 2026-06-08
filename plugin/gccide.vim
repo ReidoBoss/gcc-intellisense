@@ -27,6 +27,11 @@ if get(g:, 'gccide_auto', 1)
     autocmd!
     autocmd FileType c,cpp setlocal omnifunc=gccide#complete#omnifunc
   augroup END
+  augroup gccide_index
+    autocmd!
+    autocmd BufWritePost *.c,*.cpp,*.cc,*.cxx,*.h,*.hpp,*.hh,*.hxx
+          \ call gccide#index#refresh_file(expand('<afile>:p'))
+  augroup END
   if !hasmapto('<Plug>(gccide-goto-def)') && empty(maparg('gd', 'n'))
     nmap gd <Plug>(gccide-goto-def)
   endif

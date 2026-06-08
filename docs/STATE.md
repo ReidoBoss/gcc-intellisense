@@ -3,18 +3,76 @@
 > Always read this file first. Always update it before you stop.
 
 ## Current phase
-**P5 — Go-to-definition shipped.** `<Plug>(gccide-goto-def)` mapped
-to **`gd`** by default (shadows vim's built-in `gd` "goto local
-declaration" — intentional: ours jumps cross-file via the index, the
-built-in only works within the current function and is rarely
-useful in multi-file C projects). `gccide#goto#def()` grabs
-`<cword>`, looks it up via `gccide#index#lookup(name)`, opens single
-hits in a **new tab** (`tabedit`, override via `g:gccide_split_cmd`
-— `'split'`/`'vsplit'` for in-window splits), routes multi hits
-through the quickfix list, and short-circuits on
-already-at-definition.
+**P6 — Performance shipped.** Incremental re-index on `BufWritePost`
+(re-extracts just the saved file, splices into `s:idx`, re-persists).
+mtime-gated `:GccideIndex` (find -newer short-circuits when nothing
+changed). Baseline timings captured in `tests/manual/p6.md` step 5
+for future comparison against the firmware codebase.
+
+All roadmap phases (P0–P6) are now ticked in `TASKS.md`. Plugin
+surface area is stable; remaining work is real-codebase validation
+and the explicit "not in scope" deferrals listed below.
 
 ## Last agent
+claude (2026-06-08) — P6:
+- `autoload/gccide/index.vim`:
+  - Added `gccide#index#refresh_file(file)`. Drops every entry in
+    `s:idx` whose `file ==# abs(<file>)`, re-runs `s:extract_file`,
+    splices the fresh symbols back, re-persists. Silent no-op when
+    no in-memory + no on-disk index, or when the file is outside
+    the source root, or when the file isn't readable. Lazy-loads
+    from disk if `s:idx` is empty.
+  - Restructured `gccide#index#build()` into a two-phase async
+    pipeline. New entry checks for an existing index file; if
+    present, runs `find . -newer <index> ... | head -n 1` first.
+    Empty stdout → `gccide: index up to date` echo + no-op. Non-
+    empty → fall through to `s:do_full_build(src)` (the prior
+    body). Initial build (no on-disk index) goes straight to
+    `s:do_full_build` without the check.
+  - New script-local state for the check job: `s:check_job`,
+    `s:check_lines`. Pulse timer and `_wait_done(ms)` extended to
+    track both jobs. Self-stops when both are idle.
+  - Extracted `s:find_predicates()` so the build find and the
+    newer-check find share the same `-name '*.c' -o …` list.
+- `plugin/gccide.vim` — added `gccide_index` augroup with
+  `BufWritePost *.c,*.cpp,*.cc,*.cxx,*.h,*.hpp,*.hh,*.hxx
+  call gccide#index#refresh_file(expand('<afile>:p'))`. Gated on
+  `g:gccide_auto` like the diag/complete autocmds.
+- `tests/manual/p6.md` — 6 scripted + 1 interactive step. Covers:
+  surfaces, full build + persistence, mtime-gate short-circuit
+  (asserts `index up to date` echo, no `index built` echo),
+  refresh add/remove correctness, baseline timings (full build,
+  refresh_file, candidates×1000, lookup×1000), end-to-end
+  BufWritePost integration (open buffer, `append`, `:write`,
+  verify `candidates('proj_')` now includes the new symbol), and
+  an interactive walkthrough of "type, save, complete the new
+  identifier without `:GccideIndex`".
+
+## Smoke results (Mac, vim80)
+- Step 1: `gccide#index#refresh_file` + `gccide#index#build`
+  both defined.
+- Step 2: full build → 5 symbols, 3 files; `.gccide/index` exists
+  (640 bytes).
+- Step 3: second `:GccideIndex` echoes `gccide: index up to date`
+  — no `indexing` / `index built` lines.
+- Step 4: `candidates('proj_')` 2 → 3 after appending
+  `proj_brand_new` + `refresh_file`; `lookup('proj_brand_new')`
+  returns 1 hit; both drop to 2 / 0 after restoring the file +
+  re-refreshing.
+- Step 5 baseline (fixture, ~3 files, microscopic):
+  - `full_build`        ≈ 0.078s (dominated by async find +
+    `_wait_done` polling at 50 ms granularity)
+  - `refresh_file`      ≈ 0.005s (single file, no `find`)
+  - `candidates`×1000   ≈ 0.116s (≈ 0.12 ms/call)
+  - `lookup`×1000       ≈ 0.007s (≈ 0.007 ms/call)
+  Re-record these on the real firmware tree when you first run
+  there; they're the comparison baseline.
+- Step 6: BufWritePost integration end-to-end — append a function
+  to util.c, `:write` inside vim, then candidate count rises from
+  2 to 3 and `lookup('proj_save_test')` returns 1 hit. Fixture
+  restored via `git checkout --` at the end.
+
+## Previous (P5)
 claude (2026-06-08) — P5:
 - `autoload/gccide/index.vim` — added `gccide#index#lookup(name)`.
   Same lazy-load pattern as `candidates()`. Returns the raw hit list
@@ -102,35 +160,26 @@ claude (2026-06-08) — P4:
   in `main.c`.
 
 ## Next step
-1. User runs `tests/manual/p5.md` locally (5 scripted + 1
+1. User runs `tests/manual/p6.md` locally (6 scripted + 1
    interactive). Capture any failure in `docs/JOURNAL.md` first.
-2. Begin **P6 (performance)**: profile the diagnostic + completion
-   path, add incremental re-index on save (single-buffer re-extract
-   into `s:idx`, no full walk), tighten mtime-keyed cache
-   invalidation across modules. The chunked parser's 50-files-per
-   constant in `index.vim` is the obvious dial to profile.
-
-## Open questions (the next agent must resolve when their phase needs them)
-- **P6 incremental re-index granularity.** Easiest path:
-  `BufWritePost` runs `s:extract_file(expand('<afile>:p'))`, drops
-  the file's old entries from `s:idx`, splices in the new ones,
-  re-`s:persist()`s. More accurate: only re-persist on idle
-  (`CursorHold`) to avoid hammering disk on rapid saves. Pick one
-  while designing.
-- **P6 mtime check on `:GccideIndex` re-run.** Right now every
-  `:GccideIndex` does a full walk. If the source root's newest
-  mtime hasn't changed since the last build, we could skip the walk
-  entirely. Tempting but the win is small (the walk itself is
-  cheap) and the implementation is a `find -newer` predicate —
-  decide whether it's worth the code.
-- **Header guard noise** (`PROJ_H` etc.) still polluting completion
-  candidates. Heuristic: drop an upper-case-only `#define` if the
-  preceding non-blank line in the same file is `#ifndef <samename>`.
-  Easy to add in `s:extract_file`; defer until P6 since profiling
-  may surface other parser cleanups too.
-- **Multi-hit go-to-def UX** is wired (qflist + `:copen` + `:cfirst`)
-  but not exercised by the fixture. Verify against the real codebase
-  before declaring P5 done-done.
+2. Validate on the real firmware codebase. Re-run step 5's
+   timing block there and append the numbers to STATE.md so we
+   have a real-world baseline to regress against. Also verify
+   the multi-hit go-to-def quickfix path (the fixture has no
+   multi-defined symbol).
+3. Optional follow-ups (none of these are P6 — they are deferred
+   polish work):
+   - **Header-guard filter** in `s:extract_file`: drop a `#define
+     UPPER` when the prior non-blank line in the same file is
+     `#ifndef UPPER`. Cleans `PROJ_H` out of `PROJ_`-prefix
+     completions.
+   - **Refresh debounce** if rapid saves on big files prove
+     noticeable. Currently every `:w` runs `s:extract_file` +
+     `s:persist`; a 100 ms `timer_start` cancel/reset would
+     collapse bursts.
+   - **Deletion detection** for the mtime gate: rare enough that
+     `rm -rf .gccide/index && :GccideIndex` is the documented
+     workaround.
 
 ## Recent decisions
 - Agents run sequentially, not in parallel.
@@ -237,3 +286,22 @@ claude (2026-06-08) — P4:
   an echo instead of opening a split. Avoids the "looks like
   nothing happened" UX of splitting onto the same line you're
   already on.
+- **P6 refresh-on-save is silent on success.** Saves happen too
+  often for a status echo to be useful; the user notices the index
+  is fresh because completion shows new identifiers. Failure modes
+  (no index, file outside source root) also no-op silently.
+- **P6 mtime gate uses `find -newer <index>`**, not a synchronous
+  stat of every file. The check itself is async via the same
+  job-channel machinery as the full build; pulse timer and
+  `_wait_done` track both jobs so the test seam still works.
+- **P6 incremental refresh is per-file, not debounced.** Every
+  `:w` runs `s:extract_file` + `s:persist`. Cost is small (single
+  file, regex-only — ~5 ms in the smoke). Debouncing would add
+  complexity for no measurable win at this size; revisit if real
+  codebase saves feel sluggish.
+- **P6 mtime gate cannot detect deletions.** If a user `rm`s a
+  source file outside vim, `find -newer` reports nothing newer
+  than the index and we short-circuit, leaving the deleted file's
+  symbols. Documented workaround: nuke `.gccide/index` and
+  rebuild. The extra `find` to detect deletions wasn't worth the
+  rare-case ROI.

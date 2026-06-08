@@ -49,7 +49,7 @@ a time, since agents run sequentially.
 - [x] Write `tests/manual/p5.md`.
 
 ## P6 — Performance
-- [ ] Profile the diagnostic + completion path.
-- [ ] Incremental re-index on save.
-- [ ] mtime-keyed cache invalidation throughout.
-- [ ] Write `tests/manual/p6.md`.
+- [x] Profile the diagnostic + completion path.
+- [x] Incremental re-index on save.
+- [x] mtime-keyed cache invalidation throughout.
+- [x] Write `tests/manual/p6.md`.
