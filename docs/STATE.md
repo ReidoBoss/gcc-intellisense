@@ -3,78 +3,91 @@
 > Always read this file first. Always update it before you stop.
 
 ## Current phase
-**P3 — Identifier index shipped.** Async `find` walk over
-`g:gccide_source_root`, per-file regex extraction with brace-depth
-tracking, JSON persistence to `<project_root>/.gccide/index`.
-`:GccideIndex` builds; `:GccideFind <symbol>` populates the quickfix
-with all hits and `:copen`s.
+**P4 — Identifier autocomplete shipped.** `omnifunc=gccide#complete#omnifunc`
+auto-installed on `FileType c,cpp`. Prefix-matched candidates drawn
+from the P3 index via `gccide#index#candidates(prefix)`. Candidate
+sources are pluggable through `gccide#complete#register_source(Funcref)`
+so a future semantic backend slots in without touching the omnifunc
+surface.
 
 ## Last agent
-claude (2026-06-08) — P3:
-- `autoload/gccide/index.vim` — new module. `gccide#index#build()`
-  fires `find . -type f \( -name '*.c' -o … \)` async via
-  `job_start(['sh','-c','cd <src> && find …'], ...)`, captures stdout
-  line-by-line, then on exit chunks the file list through
-  `s:parse_chunk()` (50 files at a time, re-armed via `timer_start(1, …)`)
-  so vim's main loop ticks between batches. Each file is `readfile()`d
-  and run through `s:extract_file()`. Symbols: `d` (#define), `t`
-  (typedef, single-line or trailing `} name;`), `s` (struct/union/enum
-  tag, incl. `typedef struct NAME { … }`), `f` (function definition —
-  signature with `{` same line or next line, declarations skipped via
-  `;` detection), `g` (file-scope global — loose `\w \w (=|;|[)`
-  pattern with `(`-absence guard and keyword filter). Strings + line
-  comments + one-line block comments are stripped before brace
-  counting; multi-line `/* … */` state is threaded across lines.
-- `plugin/gccide.vim` — `:GccideIndex` and
-  `:GccideFind` (`-nargs=1`) registered.
-- `tests/fixtures/proj/inc/proj.h` — **unchanged** from P2. The
-  earlier draft of P3 added a typedef + struct tag here to exercise
-  more extractor branches; that change was reverted to keep the
-  fixture minimal. The extractor still implements `t`/`s`/`g` kinds
-  — they are simply not covered by the bundled checklist (a note in
-  p3.md flags this).
-- `tests/manual/p3.md` — 6 scripted + 1 interactive step. Covers:
-  command registration, full build + on-disk file + stats, find-by-
-  function (also exercises auto-load from `.gccide/index` on a fresh
-  vim), find-by-define-and-function, missing-symbol, no-root warning,
-  interactive `:GccideFind` → quickfix → Enter jump.
+claude (2026-06-08) — P4:
+- `autoload/gccide/index.vim` — added `gccide#index#candidates(prefix)`.
+  Lazy-loads `s:idx` from disk if empty (same trick `:GccideFind`
+  uses), then returns `[{word, kind, menu, dup}]` for names whose
+  string prefix matches. `kind` is the first hit's index kind
+  (`f`/`d`/`t`/`s`/`g`) so vim's popup shows it directly. `menu` is
+  the basename of the first hit's file, with ` +N` appended when the
+  symbol has multiple definitions. Sorted alphabetically.
+- `autoload/gccide/complete.vim` — new module.
+  `gccide#complete#omnifunc(findstart, base)` is the surface. On
+  `findstart`, walks back across `\w` chars from the cursor and
+  returns the 0-based start column. On the candidate pass, iterates
+  registered sources, de-dups by `word`, returns the merged list. If
+  the merged list is empty AND no index is loaded (neither in memory
+  nor on disk), echoes `gccide: index empty (run :GccideIndex)`
+  — chosen over implicit-build-on-first-complete because the build
+  is async; the first call would return `[]` anyway and we'd rather
+  be explicit. `gccide#complete#register_source(Funcref)` is the
+  pluggable seam; the script-local default source wraps
+  `gccide#index#candidates`. `gccide#complete#_index_loaded()` is
+  the helper that drives the nudge (test seam too).
+- `plugin/gccide.vim` — added `gccide_complete` augroup with
+  `FileType c,cpp setlocal omnifunc=gccide#complete#omnifunc`. Gated
+  on `g:gccide_auto` like the diag autocmd. No new user commands —
+  the omnifunc is the surface, not a `:GccideComplete` wrapper.
+- `tests/manual/p4.md` — 6 scripted + 1 interactive step. Covers:
+  function existence, empty-index nudge, prefix match on
+  `proj_` (auto-loaded from disk on a subsequent run with no
+  `:GccideIndex` call), prefix match on `PROJ_`, miss case (no
+  nudge when the index is loaded), `findstart` returning the
+  identifier start column, and an interactive `<C-x><C-o>` step
+  in `main.c`.
 
 ## Smoke results (Mac, vim80)
-- Fixture build: 5 symbols across 3 files (PROJ_H, PROJ_MAGIC,
-  proj_add, proj_greet, main).
-- All `:GccideFind` lookups return the expected `kind: name` qf text
-  with correct lnums (util.c:4, util.c:8, main.c:4, proj.h:2/4).
-- Index persists to JSON at
-  `tests/fixtures/proj/.gccide/index`; fresh vim auto-loads on first
-  `:GccideFind` (no rebuild needed).
-- P2 step-3 sanity (clean fixture): still passes — 0 signs, empty qf.
+- Function existence: `gccide#complete#omnifunc`,
+  `gccide#complete#register_source`, `gccide#index#candidates` all
+  defined (1/1/1) after forcing `runtime! autoload/...`.
+- Empty index: `len=0` and the `gccide: index empty (run
+  :GccideIndex)` nudge fires.
+- After `:GccideIndex` + `_wait_done`:
+  - `proj_` → `proj_add|f|util.c`, `proj_greet|f|util.c` (sorted).
+  - `PROJ_` → `PROJ_H|d|proj.h`, `PROJ_MAGIC|d|proj.h` (auto-loaded
+    from `.gccide/index` on a fresh vim invocation — no
+    `:GccideIndex` needed).
+- Miss case (`no_such_prefix_`): `len=0`, **no** nudge (index is
+  loaded; correct behavior).
+- `findstart` at `call cursor(5, 10)` on
+  `    proj_greet("world");` returns `4`.
+- `FileType c` autocmd (with `filetype plugin on`) correctly sets
+  `omnifunc=gccide#complete#omnifunc` when `main.c` is loaded.
 
 ## Next step
-1. User runs `tests/manual/p3.md` locally (6 scripted + 1 interactive).
-   Capture any failure in `docs/JOURNAL.md` first.
-2. Begin **P4 (autocomplete)**: `omnifunc=gccide#omnicomplete` returning
-   identifier-prefix-filtered candidates from `s:idx`. Pluggable
-   candidate source so a future semantic backend slots in by replacing
-   the source, not the omnifunc surface. The index module already
-   exposes the raw data — P4 just needs a `gccide#index#candidates(prefix)`
-   accessor and the omnifunc dispatch glue.
+1. User runs `tests/manual/p4.md` locally (6 scripted + 1
+   interactive). Capture any failure in `docs/JOURNAL.md` first.
+2. Begin **P5 (go-to-def)**: `<Plug>(gccide-goto-def)` mapping with
+   default `<leader>gd`. Looks up `expand('<cword>')` in the index
+   (`gccide#index#candidates(word)` is overkill — we want exact-name
+   lookup; add `gccide#index#lookup(name)` returning the hit list
+   directly). Single hit → `split | edit <file> | call cursor(lnum,
+   col)`. Multiple hits → reuse the `setqflist` path from `:GccideFind`
+   and jump to the first.
 
 ## Open questions (the next agent must resolve when their phase needs them)
-- **Should P4 trigger an implicit `:GccideIndex` on first
-  omnicomplete?** Lean yes (with a one-shot "indexing…" echo) so
-  out-of-the-box completion works without the user knowing about the
-  build command. But the build is async, so the first invocation will
-  return [] — UX needs to either block briefly or echo "still
-  building" and let the user retry. Decide when designing P4.
-- **Incremental re-index on save** is queued for P6, but a P4
-  implementation that returns stale candidates after an edit could
-  feel broken. May need a lightweight per-buffer re-extract on
-  BufWritePost in P4 to keep the current file's symbols fresh, even if
-  the cross-file re-walk waits until P6.
-- **Header guard noise**: the index currently picks up `PROJ_H` from
-  `#define PROJ_H`. Acceptable for P3 (it's a real define), mildly
-  annoying for autocomplete. Filtering heuristic (uppercase-only +
-  matching `#ifndef` in the same file) is a P4-or-later polish.
+- **P5 split direction**: `split` (horizontal above) vs `vsplit`
+  (vertical left) vs `tabedit`. Lean `split` per ARCHITECTURE.md
+  ("opens a new split"); let user override via `g:gccide_split_cmd`
+  later if asked.
+- **P5 jump-to-self handling**: looking up the word under the cursor
+  on the very line that *defines* it produces a single hit pointing
+  back at the current position. Worth a `lnum != line('.')` guard
+  before opening a split, or just leave it and let the user notice.
+- **Incremental re-index on save** (queued for P6): P4's static
+  index means a freshly-typed identifier doesn't complete until the
+  next full `:GccideIndex`. Acceptable for an initial release;
+  flagged in `tests/manual/p4.md` "Known limitations".
+- **Header guard noise** (`PROJ_H` etc.): still indexed as `d`
+  candidates, still shows in completion. Filter heuristic deferred.
 
 ## Recent decisions
 - Agents run sequentially, not in parallel.
@@ -151,3 +164,15 @@ claude (2026-06-08) — P3:
   tree typically contains headers and conditionally-excluded `.c`
   files we still want indexed for navigation. `find` over the source
   root is the right scope.
+- **P4 omnifunc does not implicitly trigger `:GccideIndex`.** The
+  build is async, so the first complete would return `[]` regardless.
+  Empty-result + no-index combinations echo a one-line nudge instead.
+  Explicit > surprising.
+- **P4 candidate sources are a list of Funcrefs**, not a single
+  pluggable hook. Registering a semantic backend later means
+  appending another source — the identifier source keeps running and
+  the omnifunc de-dups by `word`. Lets us ship semantic completion
+  incrementally without breaking the always-on identifier fallback.
+- **P4 prefix match is case-sensitive.** Mirrors vim's built-in
+  i_CTRL-X_CTRL-O behavior. Trivial to relax later by lowercasing
+  inside `gccide#index#candidates` if asked.

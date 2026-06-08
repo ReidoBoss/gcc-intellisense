@@ -20,4 +20,8 @@ if get(g:, 'gccide_auto', 1)
     autocmd BufWritePost *.c,*.cpp,*.cc,*.cxx,*.h,*.hpp,*.hh,*.hxx
           \ call gccide#diag#run()
   augroup END
+  augroup gccide_complete
+    autocmd!
+    autocmd FileType c,cpp setlocal omnifunc=gccide#complete#omnifunc
+  augroup END
 endif

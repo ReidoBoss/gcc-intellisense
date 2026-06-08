@@ -38,9 +38,9 @@ a time, since agents run sequentially.
 - [x] Write `tests/manual/p3.md`.
 
 ## P4 — Autocomplete
-- [ ] `gccide#omnicomplete()` returning index-filtered candidates.
-- [ ] Pluggable candidate source (semantic backend slot).
-- [ ] Write `tests/manual/p4.md`.
+- [x] `gccide#omnicomplete()` returning index-filtered candidates.
+- [x] Pluggable candidate source (semantic backend slot).
+- [x] Write `tests/manual/p4.md`.
 
 ## P5 — Go-to-def
 - [ ] `<Plug>(gccide-goto-def)` mapping; default `<leader>gd`.

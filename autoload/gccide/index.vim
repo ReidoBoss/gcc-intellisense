@@ -320,6 +320,33 @@ function! gccide#index#find(sym) abort
   copen
 endfunction
 
+" --- Candidates (consumed by complete.vim) ---------------------------
+
+" Returns [{word, kind, menu, dup}] for names with the given prefix.
+" Lazy-loads from disk if the in-memory index is empty.
+function! gccide#index#candidates(prefix) abort
+  if empty(s:idx)
+    call s:load()
+  endif
+  if empty(s:idx) | return [] | endif
+  let l:p = a:prefix
+  let l:plen = strlen(l:p)
+  let l:out = []
+  for [l:name, l:hits] in items(s:idx)
+    if l:plen > 0 && strpart(l:name, 0, l:plen) !=# l:p
+      continue
+    endif
+    let l:kind = empty(l:hits) ? '' : l:hits[0].kind
+    let l:menu = empty(l:hits) ? '' : fnamemodify(l:hits[0].file, ':t')
+    if len(l:hits) > 1
+      let l:menu .= ' +' . (len(l:hits) - 1)
+    endif
+    call add(l:out, {'word': l:name, 'kind': l:kind, 'menu': l:menu, 'dup': 0})
+  endfor
+  call sort(l:out, {a, b -> a.word ==# b.word ? 0 : a.word ># b.word ? 1 : -1})
+  return l:out
+endfunction
+
 " --- Test seam --------------------------------------------------------
 
 function! gccide#index#_wait_done(timeout_ms) abort

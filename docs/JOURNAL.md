@@ -352,3 +352,70 @@ Append-only history. Newest entry at the **bottom**. Format:
   whether to add a per-buffer re-extract on `BufWritePost` so
   freshly-typed identifiers complete without a full re-walk (the
   cross-file re-walk is queued for P6).
+
+## 2026-06-08 (P4) — claude
+- Shipped P4 (identifier autocomplete). Surface: vim's omnifunc.
+  Source: P3's identifier index. No new external tools — still just
+  `sh -c '… && find …'` for index builds and the Makefile for
+  diagnostics.
+- `autoload/gccide/index.vim` — added `gccide#index#candidates(prefix)`.
+  Lazy-loads `s:idx` from `.gccide/index` if empty (same trick
+  `:GccideFind` uses), filters by exact-string prefix
+  (case-sensitive — mirrors vim's i_CTRL-X_CTRL-O behavior),
+  returns `[{word, kind, menu, dup}]` sorted alphabetically. `kind`
+  is the first hit's index kind (`f`/`d`/`t`/`s`/`g`) so vim's
+  popup shows the kind indicator without a translation step.
+  `menu` is the file basename plus ` +N` when the symbol has
+  multiple definitions across files.
+- `autoload/gccide/complete.vim` — new module.
+  `gccide#complete#omnifunc(findstart, base)` walks back across `\w`
+  chars on `findstart` and returns the 0-based start column. On the
+  candidate pass it iterates the registered sources, de-dups by
+  `word`, returns the merged list. Empty result + no index loaded →
+  one-line `gccide: index empty (run :GccideIndex)` echo (chosen over
+  implicit-build-on-first-complete because the build is async and
+  the first call would return `[]` anyway — explicit > surprising).
+  `gccide#complete#register_source(Funcref)` appends to the script-
+  local `s:sources` list. The default source is registered on first
+  load and wraps `gccide#index#candidates`. A future semantic
+  backend just appends another source — identifier completion keeps
+  running as a fallback and the omnifunc handles de-dup.
+- `plugin/gccide.vim` — added a `gccide_complete` augroup with
+  `FileType c,cpp setlocal omnifunc=gccide#complete#omnifunc`, gated
+  on `g:gccide_auto`. No new user commands; omnifunc is the surface.
+- `tests/manual/p4.md` — 6 scripted + 1 interactive step. Scripted
+  steps call `gccide#complete#omnifunc(0, '<prefix>')` directly
+  because driving interactive `<C-x><C-o>` from `vim80 -S` is
+  fragile (`feedkeys` + completion races with the script loop).
+  The interactive step (#7) covers the real popup path. Steps
+  cover: function existence, empty-index nudge, prefix match on
+  `proj_`, prefix match on `PROJ_` (auto-loaded from disk — no
+  `:GccideIndex` call), miss case (must NOT nudge when index is
+  loaded), `findstart` returning the correct column.
+- Smoke-tested locally on the Mac (`vim80`):
+  - All three new functions defined after `runtime!`-loading their
+    autoload files: omnifunc/register/cands → 1/1/1.
+  - Empty fixture: `len=0` + `gccide: index empty (run :GccideIndex)`
+    nudge fires.
+  - After build: `proj_` → `proj_add|f|util.c`, `proj_greet|f|util.c`.
+  - `PROJ_` (fresh vim, no `:GccideIndex`): auto-loads from
+    `.gccide/index` and returns `PROJ_H|d|proj.h`,
+    `PROJ_MAGIC|d|proj.h`.
+  - Miss case (`no_such_prefix_`): `len=0`, no spurious nudge
+    (index is loaded — correct).
+  - `findstart` at col 10 on `    proj_greet("world");` → 4.
+  - FileType c autocmd (`filetype plugin on`) sets
+    `omnifunc=gccide#complete#omnifunc` when opening `main.c`.
+- Did **not** commit. CLAUDE.md says ask first; waiting on user
+  sign-off on the P4 checklist before commit.
+- Handoff to P5 (go-to-def): wire `<Plug>(gccide-goto-def)` with
+  default mapping `<leader>gd`. Use `expand('<cword>')` to grab the
+  identifier under the cursor, then look it up in the index — add
+  `gccide#index#lookup(name)` returning the hit list directly (the
+  `candidates(prefix)` accessor is for fuzzy-by-prefix completion;
+  go-to-def wants exact-name lookup, not the prefix path). Single
+  hit → `split | edit <file> | call cursor(lnum, col)`. Multiple
+  hits → reuse `setqflist` + `:copen` from `:GccideFind` and jump
+  to the first. Open questions in STATE.md: split direction
+  (horizontal vs vertical vs new tab) and jump-to-self handling
+  (the line that defines the cword IS the cursor's line).
