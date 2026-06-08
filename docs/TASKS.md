@@ -43,10 +43,10 @@ a time, since agents run sequentially.
 - [x] Write `tests/manual/p4.md`.
 
 ## P5 — Go-to-def
-- [ ] `<Plug>(gccide-goto-def)` mapping; default `<leader>gd`.
-- [ ] New-split jump on single hit.
-- [ ] Quickfix list on multiple hits.
-- [ ] Write `tests/manual/p5.md`.
+- [x] `<Plug>(gccide-goto-def)` mapping; default `<leader>gd`.
+- [x] New-split jump on single hit.
+- [x] Quickfix list on multiple hits.
+- [x] Write `tests/manual/p5.md`.
 
 ## P6 — Performance
 - [ ] Profile the diagnostic + completion path.

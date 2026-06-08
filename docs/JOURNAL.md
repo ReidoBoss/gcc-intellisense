@@ -419,3 +419,100 @@ Append-only history. Newest entry at the **bottom**. Format:
   to the first. Open questions in STATE.md: split direction
   (horizontal vs vertical vs new tab) and jump-to-self handling
   (the line that defines the cword IS the cursor's line).
+
+## 2026-06-08 (P4 doc + commit) — claude
+- User caught that `:setlocal omnifunc?` printed empty when running
+  step 7 of p4.md. Root cause: `vim80 -u NONE` disables filetype
+  detection, so `FileType c` never fires when `main.c` is loaded,
+  so our autocmd never runs. Added `-c 'filetype plugin on'` to
+  the step-7 launch and called out the test-rig caveat inline
+  (real-world vimrcs already have `filetype plugin on`, so this is
+  not a plugin bug).
+- User also asked for a friendlier step-7 — the original was a
+  terse 6-line dump and the user wasn't sure how to actually
+  trigger completion. Rewrote step 7 as a keystroke-by-keystroke
+  walkthrough (`:GccideIndex` → `:setlocal omnifunc?` → `o` →
+  type prefix → `<C-x><C-o>` → navigate → accept) including a
+  "common failure modes" section.
+- Committed P4 (`20a075e`): autoload/gccide/index.vim +
+  autoload/gccide/complete.vim + plugin/gccide.vim + tests/manual/p4.md
+  + STATE/JOURNAL/TASKS docs. 7 files, +522/-67. Not pushed.
+
+## 2026-06-08 (P5) — claude
+- Shipped P5 (go-to-definition). No new external tools; pure
+  vimscript over the P3 index.
+- `autoload/gccide/index.vim` — added `gccide#index#lookup(name)`.
+  Same lazy-load-from-disk pattern as `candidates()`. Returns a
+  `copy(s:idx[name])` so callers can mutate without disturbing the
+  in-memory index. `[]` on missing name.
+- `autoload/gccide/goto.vim` — new module. `gccide#goto#def()` is
+  the entry. Sequence: grab `expand('<cword>')` (empty → echo bail);
+  `lookup()`; 0 hits → echo bail; 1 hit → if `(file, lnum)` matches
+  current position echo `already at definition`, else run
+  `s:split_cmd()` (default `split`, override via `g:gccide_split_cmd`)
+  + `edit` + `cursor(lnum, col)` + `normal! zz` to centre the line;
+  >1 hits → build qf items mirroring `:GccideFind`'s format with a
+  `gccide-goto:<word>` title, `setqflist` two-call form (vim 8.0),
+  `:copen`, `:cfirst`.
+- `plugin/gccide.vim` — added `:GccideGoto` command and
+  `nnoremap <silent> <Plug>(gccide-goto-def) :<C-u>call gccide#goto#def()<CR>`.
+  Default `gd → <Plug>(gccide-goto-def)` mapping is installed only
+  when both `!hasmapto('<Plug>(gccide-goto-def)')` and
+  `empty(maparg('gd', 'n'))` are true. `maparg('gd', 'n')` only
+  reports user-defined mappings — vim's built-in `gd` (goto local
+  declaration) reports empty, so our mapping installs over the
+  built-in. User asked for `gd` over `<leader>gd` because the
+  built-in is rarely useful in multi-file C projects and the
+  leader combo is one keystroke too many for a navigation core
+  loop. Users who want a different key just `nmap <whatever>
+  <Plug>(gccide-goto-def)`.
+- `tests/manual/p5.md` — 5 scripted + 1 interactive. Scripted
+  steps: surface reachability, single-hit jump (main.c:5
+  `proj_greet` → util.c:8), no-hit echo on `printf`, jump-to-self
+  echo on `proj_add` from its own definition line, mapping
+  introspection via `maparg`. Interactive step uses the
+  `filetype plugin on` launch (lesson from P4) and walks through
+  real `gd` invocations. Coverage gap noted: fixture has no
+  multi-defined symbol, so the qflist+`:copen` path isn't
+  exercised — verify on real codebase.
+- **Late P5 tweaks (same session)**: user asked for `gd` over
+  `<leader>gd` (already covered above) and then asked for new
+  tab over horizontal split. Flipped `s:split_cmd()`'s default
+  from `'split'` to `'tabedit'`. Updated p5.md scripted assertions
+  to use `tabpagenr('$')` / `tabpagenr()` instead of
+  `winnr('$')` (each tab has its own window count, so the
+  original assertion would fail under tabedit). Interactive step
+  rewritten to use `:tabclose` between attempts and `gt`/`gT`
+  rather than `:close`/window-switching. Updated ARCHITECTURE.md
+  go-to-def section + added `g:gccide_split_cmd` to the config-var
+  list. Re-smoke green: step 2 → tabcount=2 tabnr=2, steps 3/4 →
+  tabcount=1.
+- Smoke-tested locally on the Mac (`vim80`):
+  - Lookup/goto both defined after autoload.
+  - Cursor at main.c (5, 10) on `proj_greet` → split opens util.c,
+    cursor at (8, 1), `winnr('$') == 2`.
+  - Cursor on `printf` (not indexed) → echo
+    `gccide: no definition for printf`, no split.
+  - Cursor at util.c (4, 5) on `proj_add`'s definition line →
+    echo `gccide: already at definition of proj_add`, no split.
+  - `<Plug>(gccide-goto-def)` → `:<C-U>call gccide#goto#def()<CR>`.
+  - `<leader>gd` → `<Plug>(gccide-goto-def)`.
+- Did **not** commit. CLAUDE.md says ask first; waiting on user
+  sign-off on the P5 checklist before commit.
+- Handoff to P6 (performance): three queued items —
+  - **Incremental re-index on save.** Add a `BufWritePost
+    *.c,*.cpp,*.cc,*.cxx,*.h,*.hpp,*.hh,*.hxx` autocmd that calls
+    `s:extract_file(expand('<afile>:p'))`, drops the file's old
+    entries from `s:idx`, splices in the new ones, re-persists.
+    Decision needed: persist on every save or debounce via
+    `CursorHold`.
+  - **mtime-gated full rebuild.** `:GccideIndex` currently walks
+    every file every time. A `find . -newer .gccide/index` predicate
+    could short-circuit when nothing changed, but the walk is
+    cheap on the fixture — only worth doing if profiling on the
+    real codebase shows it matters.
+  - **Header guard filter.** `PROJ_H` pollutes completion. Drop
+    upper-case-only `#define`s when the preceding non-blank line
+    in the same file is `#ifndef <samename>`. Easy in
+    `s:extract_file`; fold in with whatever other parser cleanups
+    profiling surfaces.

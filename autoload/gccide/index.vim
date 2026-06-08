@@ -320,6 +320,18 @@ function! gccide#index#find(sym) abort
   copen
 endfunction
 
+" --- Exact-name lookup (consumed by goto.vim) ------------------------
+
+" Returns the raw hit list [{file, lnum, col, kind}] for an exact name,
+" or [] if missing. Lazy-loads from disk if the in-memory index is empty.
+function! gccide#index#lookup(name) abort
+  if empty(s:idx)
+    call s:load()
+  endif
+  if empty(s:idx) || !has_key(s:idx, a:name) | return [] | endif
+  return copy(s:idx[a:name])
+endfunction
+
 " --- Candidates (consumed by complete.vim) ---------------------------
 
 " Returns [{word, kind, menu, dup}] for names with the given prefix.

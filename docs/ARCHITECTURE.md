@@ -88,9 +88,15 @@ Each component maps to a phase in `ROADMAP.md`.
   slot in by replacing the source, not the omnifunc surface.
 
 ### 6. Go-to-definition
-- `<Plug>(gccide-goto-def)` — default mapping `<leader>gd`.
+- `<Plug>(gccide-goto-def)` — default mapping `gd` (shadows vim's
+  built-in `gd`; the built-in is rarely useful in multi-file C
+  projects).
 - Look up the word under the cursor in the index.
-- On a single hit: `split | edit <file> | call cursor(lnum, col)`.
+- On a single hit: `tabedit <file> | call cursor(lnum, col)`
+  (override the open command via `g:gccide_split_cmd` —
+  `'split'`/`'vsplit'` for in-window splits).
+- On a single hit where `(file, lnum)` already matches the cursor:
+  echo `already at definition` and bail.
 - On multiple hits: populate the quickfix list, jump to the first.
 
 ## External tools the plugin shells out to
@@ -128,6 +134,11 @@ that.
 - `g:gccide_index_path`     — override the default
                               `<project_root>/.gccide/index` location
                               for the identifier index.
+- `g:gccide_split_cmd`      — open command used by go-to-def
+                              (default `'tabedit'`). Set to `'split'`
+                              for a horizontal split, `'vsplit'` for
+                              vertical, or any ex command that
+                              accepts a filename argument.
 
 ## Why these choices
 
