@@ -9,6 +9,15 @@ mtime-gated `:GccideIndex` (find -newer short-circuits when nothing
 changed). Baseline timings captured in `tests/manual/p6.md` step 5
 for future comparison against the firmware codebase.
 
+**Post-P6 polish (same session):** go-to-def now jumps in place
+(same window, no new tab) when the definition lives in the current
+buffer. Prior cursor position is pushed to the jumplist via
+`<lnum>G`, so `<C-o>` walks back. Cross-file behavior unchanged
+(still `tabedit`). User feedback drove the change.
+`tests/manual/p5.md` gains a scripted "same-file" step 3 (uses
+`append()` to inject a phantom in-memory call without modifying
+the on-disk fixture) and a corresponding interactive step.
+
 All roadmap phases (P0–P6) are now ticked in `TASKS.md`. Plugin
 surface area is stable; remaining work is real-codebase validation
 and the explicit "not in scope" deferrals listed below.
@@ -305,3 +314,13 @@ claude (2026-06-08) — P4:
   symbols. Documented workaround: nuke `.gccide/index` and
   rebuild. The extra `find` to detect deletions wasn't worth the
   rare-case ROI.
+- **Same-file go-to-def jumps in place, not in a new tab.**
+  `s:jump()` checks `fnamemodify(hit.file, ':p') ==# expand('%:p')`
+  before running `s:split_cmd()`. Same-file path uses
+  `execute 'normal! <lnum>G'` (which adds the prior cursor to the
+  jumplist) followed by `cursor(lnum, col)` to refine the column.
+  Cross-file path is unchanged: `tabedit <file> | cursor(lnum,
+  col)`. Result: `<C-o>` after a same-file jump returns to the
+  call site, and cross-file jumps still spawn the tab. User
+  feedback drove the change — opening a tab for an in-file move
+  is overkill.

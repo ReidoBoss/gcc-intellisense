@@ -1,11 +1,16 @@
 " Go-to-definition: look up the identifier under the cursor in the index.
-" Single hit  -> open in a new split, jump the cursor to (lnum, col).
-" Multiple    -> populate quickfix and jump to the first.
-" None        -> echo and bail.
+" Single hit, target in current file  -> jump in place, push the prior
+"                                        position onto the jumplist so
+"                                        <C-o> goes back.
+" Single hit, target in another file  -> open via s:split_cmd() (default
+"                                        tabedit), jump cursor.
+" Multiple hits                       -> populate quickfix, jump to first.
+" None                                -> echo and bail.
 "
 " Override the open command via g:gccide_split_cmd. Default 'tabedit'
 " (new tab) — set to 'split' for a horizontal split or 'vsplit' for
-" vertical.
+" vertical. Only applies to cross-file jumps; same-file always stays
+" in the current window.
 
 function! s:split_cmd() abort
   return get(g:, 'gccide_split_cmd', 'tabedit')
@@ -17,6 +22,16 @@ function! s:same_position(hit) abort
 endfunction
 
 function! s:jump(hit) abort
+  if fnamemodify(a:hit.file, ':p') ==# expand('%:p')
+    " Same-file: jump in place. The <lnum>G motion is what registers
+    " the prior cursor position in the jumplist (cursor() alone does
+    " not), so <C-o> after a same-file goto walks back to the call
+    " site. The cursor() call refines to the exact column.
+    execute 'normal! ' . a:hit.lnum . 'G'
+    call cursor(a:hit.lnum, a:hit.col)
+    normal! zz
+    return
+  endif
   execute s:split_cmd() . ' ' . fnameescape(a:hit.file)
   call cursor(a:hit.lnum, a:hit.col)
   normal! zz

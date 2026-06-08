@@ -92,9 +92,14 @@ Each component maps to a phase in `ROADMAP.md`.
   built-in `gd`; the built-in is rarely useful in multi-file C
   projects).
 - Look up the word under the cursor in the index.
-- On a single hit: `tabedit <file> | call cursor(lnum, col)`
-  (override the open command via `g:gccide_split_cmd` —
-  `'split'`/`'vsplit'` for in-window splits).
+- On a single hit, **target in another file**:
+  `tabedit <file> | call cursor(lnum, col)` (override the open
+  command via `g:gccide_split_cmd` — `'split'`/`'vsplit'` for
+  in-window splits).
+- On a single hit, **target in the current file**: jump in place
+  via `<lnum>G` + `cursor(lnum, col)`. No new tab/split. The
+  `<lnum>G` motion pushes the prior cursor onto the jumplist so
+  `<C-o>` returns to the call site.
 - On a single hit where `(file, lnum)` already matches the cursor:
   echo `already at definition` and bail.
 - On multiple hits: populate the quickfix list, jump to the first.

@@ -588,3 +588,36 @@ Append-only history. Newest entry at the **bottom**. Format:
     in the same file is `#ifndef <samename>`. Easy in
     `s:extract_file`; fold in with whatever other parser cleanups
     profiling surfaces.
+
+## 2026-06-08 (post-P6 goto-def same-file) — claude
+- User: "i don't want the go-to-def to open on a new tab if it's
+  in the same file." Reasonable — spawning a tab for an in-file
+  move is overkill.
+- `autoload/gccide/goto.vim`: `s:jump(hit)` now checks
+  `fnamemodify(a:hit.file, ':p') ==# expand('%:p')` before doing
+  anything. Same-file branch uses `execute 'normal! <lnum>G'`
+  (which registers the prior cursor in vim's jumplist) followed
+  by `cursor(lnum, col)` to refine the column and `normal! zz` to
+  centre. Cross-file branch is unchanged: `s:split_cmd() ' '
+  fnameescape(file)` (default `tabedit`) + `cursor(...)` + `zz`.
+- Why `<lnum>G` instead of `cursor()` alone: `cursor()` is a
+  function call, not a "jump motion", so it does NOT add to the
+  jumplist. Without the `G` motion, `<C-o>` after a same-file
+  goto would not return to the call site — bad UX. `<lnum>G`
+  registers the jumplist entry; the follow-up `cursor()` refines
+  the column without touching jumplist further.
+- `tests/manual/p5.md`: new scripted step 3 ("Same-file hit:
+  jumps in place, no new tab"). Uses `append(line('$'),
+  ['proj_add'])` to inject a phantom in-memory call site inside
+  the live `util.c` buffer; the on-disk file is **not**
+  modified, so the index still points at the real `proj_add`
+  definition at line 4. Asserts `tabcount=1`, `bufname=util.c`,
+  `lnum=4` — proves the jump stayed in the current window.
+  Renumbered steps 4–7 (was 3–6); header count updated.
+  Interactive step gained a new bullet that walks through the
+  same flow manually, then verifies `<C-o>` returns to the
+  phantom line.
+- Smoke-tested locally (Mac, vim80). Same-file: before `(util.c,
+  1 tab, line 11)` → after `(util.c, 1 tab, line 4)`. Cross-file
+  regression: still spawns a 2nd tab and lands on line 8 of
+  util.c. Both green.
