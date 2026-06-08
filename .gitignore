@@ -1,5 +1,5 @@
 .gccide/
 *.o
-*.swp
-.*.swp
+*.sw[a-p]
+.*.sw[a-p]
 tests/fixtures/proj/proj
