@@ -324,3 +324,20 @@ claude (2026-06-08) — P4:
   call site, and cross-file jumps still spawn the tab. User
   feedback drove the change — opening a tab for an in-file move
   is overkill.
+- **Index auto-builds at plugin-load time, not on `VimEnter`.**
+  Vim sources `plugin/*.vim` AFTER vimrc, so
+  `g:gccide_project_root` is already set by the time
+  `plugin/gccide.vim` runs. A `VimEnter` autocmd is attractive in
+  principle but doesn't fire under `vim80 -u NONE -S script.vim`
+  (no event loop), which would break every scripted test seam.
+  Plugin-load time works for both real users and the tests.
+  `gccide#index#build()` is async (job_start returns
+  immediately), so no startup blocking; the P6 mtime gate makes
+  re-launches free. Opt out with `let g:gccide_index_on_startup =
+  0` in your vimrc before this plugin loads.
+- **Top-level `README.md` was added on user request.** It is the
+  on-ramp: install, configure, commands, mappings, config-var
+  reference. Deep material stays in `docs/` (architecture,
+  conventions, journal, state, roadmap). The README links to
+  those at the bottom so a new contributor lands on the right
+  page.

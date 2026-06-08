@@ -35,4 +35,16 @@ if get(g:, 'gccide_auto', 1)
   if !hasmapto('<Plug>(gccide-goto-def)') && empty(maparg('gd', 'n'))
     nmap gd <Plug>(gccide-goto-def)
   endif
+  " Kick off an index build at plugin-load time when a project root is
+  " configured. Vim sources plugin/* AFTER the user's vimrc, so the
+  " required vars are already visible. The build is async (job_start
+  " returns immediately) and the P6 mtime gate makes it a no-op when
+  " nothing has changed on disk since the last persist. Opt out with
+  " `let g:gccide_index_on_startup = 0` in your vimrc before this
+  " plugin loads.
+  if get(g:, 'gccide_index_on_startup', 1)
+        \ && (!empty(get(g:, 'gccide_project_root', ''))
+        \ || !empty(get(g:, 'gccide_source_root', '')))
+    call gccide#index#build()
+  endif
 endif

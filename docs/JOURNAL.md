@@ -621,3 +621,46 @@ Append-only history. Newest entry at the **bottom**. Format:
   1 tab, line 11)` → after `(util.c, 1 tab, line 4)`. Cross-file
   regression: still spawns a 2nd tab and lands on line 8 of
   util.c. Both green.
+
+## 2026-06-08 (startup index + README) — claude
+- User: "Can the indexing run on start up? Also can you give me
+  readme.md for setting this up?" Two asks.
+- **Startup index.** Added a `call gccide#index#build()` to the
+  bottom of `plugin/gccide.vim`'s `g:gccide_auto` block, gated on
+  `get(g:, 'gccide_index_on_startup', 1)` and on at least one of
+  `g:gccide_project_root` / `g:gccide_source_root` being set.
+  - Initially tried a `VimEnter` autocmd — turns out VimEnter
+    does not fire under `vim80 -u NONE -S script.vim` because
+    there is no event loop in batch mode. Probed this with
+    introspection (the autocmd registered correctly but its body
+    never ran, no writefile output). Switched to plugin-load
+    time, which works for both real users (vimrc runs first,
+    then plugins, so the config vars are visible) and the
+    scripted test seam.
+  - The build is async (`job_start` returns immediately) so no
+    startup blocking. The P6 mtime gate makes re-launches free:
+    `find -newer <index>` returns empty → echo `index up to date`
+    → no-op.
+  - Smoke-tested both paths: with project root set + default
+    `g:gccide_index_on_startup` → `gccide: indexing ...` then
+    `gccide: index built (N symbols, 3 files)`, persisted to
+    `.gccide/index`. With `g:gccide_index_on_startup = 0` → no
+    build, empty stats, no index file.
+- **README.md** (top-level). User asked for a setup README. The
+  project already has comprehensive `docs/` so the README is the
+  on-ramp: prerequisites, install (vim 8 packages + manual rtp),
+  vimrc configuration with minimum-viable + commented optional
+  vars, commands table, mappings table, full config-var
+  reference, manual-test pointer, and links into `docs/` for the
+  deep material. About 110 lines, intentionally narrow scope.
+  CLAUDE.md generally bans creating docs without an explicit
+  request — the user explicitly asked, so this one is in.
+- Added `g:gccide_index_on_startup` to `docs/ARCHITECTURE.md`'s
+  config-var list so the deep doc stays accurate.
+- Existing tests (`tests/manual/p3.md`–`p6.md`) still pass
+  because `gccide#index#build()` is idempotent under the busy
+  guard and the mtime gate. The auto-startup in tests is also
+  silently skipped because all test scripts do `runtime!` BEFORE
+  setting `g:gccide_project_root` — at runtime time the project
+  root is unset, the startup check sees empty, no build fires.
+  Tests' explicit `:GccideIndex` does the actual work.

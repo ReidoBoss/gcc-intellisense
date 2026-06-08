@@ -144,6 +144,18 @@ that.
                               for a horizontal split, `'vsplit'` for
                               vertical, or any ex command that
                               accepts a filename argument.
+- `g:gccide_index_on_startup` — when set to 1 (default) and a
+                              project/source root is configured,
+                              `plugin/gccide.vim` runs
+                              `gccide#index#build()` at load time
+                              so the index is warm when the user
+                              opens their first buffer. The build
+                              is async (job_start returns
+                              immediately) and the P6 mtime gate
+                              makes it a no-op when nothing has
+                              changed since the last persist. Set
+                              to 0 in your vimrc (before the
+                              plugin loads) to opt out.
 
 ## Why these choices
 
